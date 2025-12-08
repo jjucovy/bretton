@@ -1,0 +1,525 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bretton Woods Conference - Multiplayer (Server)</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div id="root">
+        <div class="container">
+            <div class="card">
+                <p style="text-align: center; padding: 40px;">Connecting to server...</p>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Socket.io client -->
+    <script src="/socket.io/socket.io.js"></script>
+    
+    <!-- React -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    
+    <script type="text/babel">
+        // Load game data
+        let gameData = null;
+        fetch('/game-data.json')
+          .then(r => r.json())
+          .then(data => {
+            gameData = data;
+            initializeApp();
+          });
+
+        const socket = io();
+        const { useState, useEffect } = React;
+
+        const BrettonWoodsMultiplayer = () => {
+          const [playerId] = useState(() => {
+            let id = sessionStorage.getItem('brettonWoodsPlayerId');
+            if (!id) {
+              id = `player_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+              sessionStorage.setItem('brettonWoodsPlayerId', id);
+            }
+            return id;
+          });
+          
+          const [playerCountry, setPlayerCountry] = useState(null);
+          const [isReady, setIsReady] = useState(false);
+          const [gameStateData, setGameStateData] = useState(null);
+          const [showEconomics, setShowEconomics] = useState(false);
+          const [connected, setConnected] = useState(false);
+
+          useEffect(() => {
+            // Socket event listeners
+            socket.on('connect', () => {
+              console.log('Connected to server');
+              setConnected(true);
+            });
+
+            socket.on('disconnect', () => {
+              console.log('Disconnected from server');
+              setConnected(false);
+            });
+
+            socket.on('stateUpdate', (state) => {
+              setGameStateData(state);
+              const player = state.players[playerId];
+              if (player) {
+                setPlayerCountry(player.country);
+              }
+              setIsReady(state.readyPlayers.includes(playerId));
+            });
+
+            socket.on('joinResult', (result) => {
+              if (!result.success) {
+                alert(result.message);
+              }
+            });
+
+            return () => {
+              socket.off('connect');
+              socket.off('disconnect');
+              socket.off('stateUpdate');
+              socket.off('joinResult');
+            };
+          }, [playerId]);
+
+          const joinGame = (country) => {
+            socket.emit('joinGame', { playerId, country });
+          };
+
+          const leaveGame = () => {
+            socket.emit('leaveGame', { playerId });
+            setPlayerCountry(null);
+          };
+
+          const toggleReady = () => {
+            const newReady = !isReady;
+            socket.emit('setReady', { playerId, ready: newReady });
+          };
+
+          const startGame = () => {
+            socket.emit('startGame');
+          };
+
+          const submitVote = (issueId, optionId) => {
+            socket.emit('submitVote', { playerId, issueId, optionId });
+          };
+
+          const advanceRound = () => {
+            socket.emit('nextRound');
+          };
+
+          const resetGame = () => {
+            if (confirm('Are you sure you want to reset the game for all players?')) {
+              socket.emit('resetGame');
+              setPlayerCountry(null);
+            }
+          };
+
+          if (!gameData || !gameStateData) {
+            return (
+              <div className="container">
+                <div className="card">
+                  <p style={{ textAlign: 'center', padding: '40px' }}>
+                    {!connected ? '🔴 Connecting to server...' : '⚙️ Loading game data...'}
+                  </p>
+                </div>
+              </div>
+            );
+          }
+
+          const { countries, economicData, issues } = gameData;
+          const currentIssue = issues[gameStateData.currentRound - 1];
+          const availableCountries = Object.keys(countries).filter(
+            country => !Object.values(gameStateData.players).some(p => p.country === country)
+          );
+
+          // Connection status indicator
+          const ConnectionStatus = () => (
+            <div style={{
+              position: 'fixed',
+              top: '10px',
+              right: '10px',
+              padding: '8px 16px',
+              background: connected ? '#dcfce7' : '#fee2e2',
+              color: connected ? '#166534' : '#991b1b',
+              borderRadius: '6px',
+              fontSize: '0.875rem',
+              fontWeight: '600',
+              zIndex: 1000
+            }}>
+              {connected ? '🟢 Connected' : '🔴 Disconnected'}
+            </div>
+          );
+
+          // Lobby Screen
+          if (!gameStateData.gameStarted && gameStateData.gamePhase === 'lobby') {
+            return (
+              <div className="container">
+                <ConnectionStatus />
+                <div className="header">
+                  <h1>🌍 Bretton Woods 1944</h1>
+                  <p>Multiplayer Simulation - Lobby</p>
+                </div>
+
+                <div className="card">
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '20px' }}>
+                    <h2 style={{ fontSize: '1.5rem', color: '#1e293b' }}>Game Lobby</h2>
+                    <div style={{ fontSize: '0.875rem', color: '#64748b' }}>
+                      Room: {gameStateData.gameId}
+                    </div>
+                  </div>
+
+                  <div style={{ marginBottom: '30px' }}>
+                    <h3 style={{ fontSize: '1.125rem', marginBottom: '16px' }}>
+                      👥 Players ({Object.keys(gameStateData.players).length}/5)
+                    </h3>
+                    
+                    <div style={{ display: 'grid', gap: '12px' }}>
+                      {Object.entries(gameStateData.players).map(([id, player]) => (
+                        <div key={id} style={{
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          padding: '12px',
+                          background: id === playerId ? '#eff6ff' : '#f8fafc',
+                          borderRadius: '8px',
+                          borderLeft: '4px solid ' + (id === playerId ? '#3b82f6' : '#cbd5e1')
+                        }}>
+                          <div>
+                            <span className={countries[player.country].textColor} style={{ fontWeight: 'bold' }}>
+                              {countries[player.country].name}
+                            </span>
+                            {id === playerId && <span style={{ marginLeft: '8px', fontSize: '0.875rem', color: '#3b82f6' }}>(You)</span>}
+                          </div>
+                          <div>
+                            {gameStateData.readyPlayers.includes(id) ? (
+                              <span style={{ color: '#16a34a', fontWeight: 'bold' }}>✓ Ready</span>
+                            ) : (
+                              <span style={{ color: '#64748b' }}>Not Ready</span>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  {!playerCountry ? (
+                    <div>
+                      <h3 style={{ fontSize: '1.125rem', marginBottom: '16px' }}>Select Your Nation</h3>
+                      <div className="country-grid">
+                        {availableCountries.map(key => (
+                          <div key={key} className={`country-card ${countries[key].color}`} onClick={() => joinGame(key)}>
+                            <h3>{countries[key].name}</h3>
+                            <p style={{ fontSize: '0.875rem', marginBottom: '12px', opacity: 0.9' }}>
+                              {countries[key].economicPosition}
+                            </p>
+                            <ul>
+                              {countries[key].objectives.slice(0, 2).map((obj, idx) => (
+                                <li key={idx}>{obj}</li>
+                              ))}
+                            </ul>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ) : (
+                    <div style={{ textAlign: 'center' }}>
+                      <div style={{ marginBottom: '20px', padding: '20px', background: '#f8fafc', borderRadius: '8px' }}>
+                        <p style={{ color: '#64748b', marginBottom: '8px' }}>You are playing as</p>
+                        <h2 className={countries[playerCountry].textColor} style={{ fontSize: '1.75rem' }}>
+                          {countries[playerCountry].name}
+                        </h2>
+                      </div>
+                      
+                      <div style={{ display: 'flex', gap: '12px', justifyContent: 'center', flexWrap: 'wrap' }}>
+                        <button className={isReady ? 'btn-success' : 'btn-primary'} onClick={toggleReady}>
+                          {isReady ? '✓ Ready' : 'Mark Ready'}
+                        </button>
+                        <button className="btn-secondary" onClick={leaveGame}>← Leave Game</button>
+                        {Object.keys(gameStateData.players).length > 1 && 
+                         gameStateData.readyPlayers.length === Object.keys(gameStateData.players).length && (
+                          <button className="btn-success" onClick={startGame}>🎮 Start Conference</button>
+                        )}
+                      </div>
+
+                      <button className="btn-danger" onClick={resetGame} style={{ marginTop: '20px' }}>
+                        🔄 Reset Game
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </div>
+            );
+          }
+
+          // Game Complete
+          if (gameStateData.gamePhase === 'complete') {
+            const sortedScores = Object.entries(gameStateData.scores).sort((a, b) => b[1] - a[1]);
+            const winner = sortedScores[0];
+
+            return (
+              <div className="container">
+                <ConnectionStatus />
+                <div className="header">
+                  <h1>🏆 Conference Results</h1>
+                  <p>Final Outcomes</p>
+                </div>
+
+                <div className="card">
+                  <h2 style={{ textAlign: 'center', marginBottom: '20px' }}>
+                    {countries[winner[0]].name} Wins!
+                  </h2>
+
+                  <div className="final-scores">
+                    {sortedScores.map(([country, score]) => (
+                      <div key={country} className={`score-card ${countries[country].color}`}>
+                        <h3>{countries[country].name}</h3>
+                        <div className="score-value">{score}</div>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div style={{ textAlign: 'center' }}>
+                    <button className="btn-primary" onClick={resetGame}>🔄 Play Again</button>
+                  </div>
+                </div>
+              </div>
+            );
+          }
+
+          // Voting Screen
+          if (!playerCountry) {
+            return (
+              <div className="container">
+                <ConnectionStatus />
+                <div className="card">
+                  <h3 style={{ textAlign: 'center', color: '#dc2626', marginBottom: '20px' }}>
+                    ⚠️ You Are Not in the Game
+                  </h3>
+                  <p style={{ textAlign: 'center', color: '#64748b', marginBottom: '30px' }}>
+                    Please wait for the game to reset or refresh to rejoin.
+                  </p>
+                  <div style={{ textAlign: 'center' }}>
+                    <button className="btn-secondary" onClick={() => window.location.reload()}>
+                      🔄 Refresh Page
+                    </button>
+                  </div>
+                </div>
+              </div>
+            );
+          }
+
+          const myCountry = countries[playerCountry];
+          const myVoteKey = `${currentIssue.id}-${playerCountry}`;
+          const myVote = gameStateData.votes[myVoteKey];
+          const allVotesIn = Object.keys(gameStateData.players).every(pid => {
+            const p = gameStateData.players[pid];
+            const voteKey = `${currentIssue.id}-${p.country}`;
+            return gameStateData.votes[voteKey] !== undefined;
+          });
+
+          return (
+            <div className="container">
+              <ConnectionStatus />
+              <div className="header">
+                <h1>🌍 Bretton Woods Conference</h1>
+                <p>Round {gameStateData.currentRound} of {issues.length}</p>
+              </div>
+
+              <div className="card" style={{ marginBottom: '20px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: '16px' }}>
+                  <div>
+                    <h3 className={myCountry.textColor} style={{ fontSize: '1.25rem', marginBottom: '4px' }}>
+                      {myCountry.name}
+                    </h3>
+                    <p style={{ color: '#64748b', fontSize: '0.875rem' }}>
+                      Score: {gameStateData.scores[playerCountry]} points
+                    </p>
+                  </div>
+                  <div>
+                    <button className="btn-secondary" onClick={() => setShowEconomics(!showEconomics)}>
+                      {showEconomics ? 'Hide' : 'Show'} Economic Data
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {showEconomics && (
+                <div className="card">
+                  <h3 style={{ marginBottom: '20px' }}>Economic Position - 1944</h3>
+                  <div className="economic-grid">
+                    <div className="economic-card">
+                      <h4>Gold Reserves</h4>
+                      <p>${economicData[playerCountry].goldReserves}M</p>
+                    </div>
+                    <div className="economic-card">
+                      <h4>GDP</h4>
+                      <p>${economicData[playerCountry].gdp}M</p>
+                    </div>
+                    <div className="economic-card">
+                      <h4>War Debt</h4>
+                      <p>${economicData[playerCountry].warDebt}M</p>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              <div className="card">
+                <h2>{currentIssue.title}</h2>
+                <p style={{ color: '#64748b', margin: '16px 0' }}>{currentIssue.description}</p>
+
+                <div style={{ marginTop: '20px' }}>
+                  <h3 style={{ marginBottom: '16px', fontSize: '1.125rem' }}>Options:</h3>
+                  {currentIssue.options.map((option, idx) => {
+                    const favorsYou = option.favors.includes(playerCountry);
+                    const opposesYou = option.opposes.includes(playerCountry);
+                    const isSelected = myVote === option.id;
+                    
+                    return (
+                      <div 
+                        key={option.id} 
+                        onClick={() => myVote === undefined && submitVote(currentIssue.id, option.id)}
+                        style={{ 
+                          padding: '16px', 
+                          background: isSelected ? '#3b82f6' : (favorsYou ? '#dcfce7' : opposesYou ? '#fee2e2' : '#f8fafc'),
+                          borderRadius: '8px',
+                          marginBottom: '12px',
+                          borderLeft: '4px solid ' + (isSelected ? '#1e40af' : favorsYou ? '#16a34a' : opposesYou ? '#dc2626' : '#3b82f6'),
+                          cursor: myVote === undefined ? 'pointer' : 'default',
+                          transition: 'all 0.2s',
+                          color: isSelected ? 'white' : 'inherit'
+                        }}
+                      >
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <div style={{ flex: 1 }}>
+                            <strong style={{ fontSize: '1.125rem' }}>{String.fromCharCode(65 + idx)}.</strong> {option.text}
+                          </div>
+                          <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginLeft: '16px' }}>
+                            {isSelected && <span style={{ fontWeight: 'bold' }}>✓ SELECTED</span>}
+                            {!isSelected && favorsYou && <span style={{ color: '#16a34a', fontSize: '0.875rem' }}>✓ Favors (+10)</span>}
+                            {!isSelected && opposesYou && <span style={{ color: '#dc2626', fontSize: '0.875rem' }}>✗ Opposes (-5)</span>}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                <div style={{ marginTop: '30px', padding: '20px', background: '#f8fafc', borderRadius: '8px', textAlign: 'center' }}>
+                  {myVote === undefined ? (
+                    <p style={{ color: '#64748b' }}>
+                      👆 Click on an option above to cast your vote
+                    </p>
+                  ) : (
+                    <div>
+                      <p style={{ fontSize: '1.125rem', color: '#16a34a', fontWeight: 'bold', marginBottom: '12px' }}>
+                        ✓ Vote Cast for Option {String.fromCharCode(65 + currentIssue.options.findIndex(o => o.id === myVote))}
+                      </p>
+                      <button className="btn-secondary" onClick={() => submitVote(currentIssue.id, undefined)}>
+                        Change Vote
+                      </button>
+                    </div>
+                  )}
+                </div>
+
+                {myVote !== undefined && !allVotesIn && (
+                  <div style={{ marginTop: '20px', padding: '16px', background: '#fef3c7', borderRadius: '8px', textAlign: 'center' }}>
+                    <p style={{ color: '#92400e' }}>
+                      ⏳ Waiting for other players... ({Object.keys(gameStateData.players).filter(id => {
+                        const p = gameStateData.players[id];
+                        const vk = `${currentIssue.id}-${p.country}`;
+                        return gameStateData.votes[vk] !== undefined;
+                      }).length} / {Object.keys(gameStateData.players).length} voted)
+                    </p>
+                  </div>
+                )}
+
+                {allVotesIn && (
+                  <div style={{ marginTop: '20px' }}>
+                    <div style={{ marginBottom: '16px', padding: '16px', background: '#dcfce7', borderRadius: '8px' }}>
+                      <p style={{ color: '#166534', textAlign: 'center', fontWeight: 'bold', marginBottom: '12px' }}>
+                        ✓ All players voted!
+                      </p>
+                      {(() => {
+                        const voteCounts = {};
+                        currentIssue.options.forEach(opt => voteCounts[opt.id] = 0);
+                        
+                        Object.keys(gameStateData.players).forEach(pid => {
+                          const p = gameStateData.players[pid];
+                          const vk = `${currentIssue.id}-${p.country}`;
+                          const vote = gameStateData.votes[vk];
+                          if (vote) voteCounts[vote]++;
+                        });
+                        
+                        let winningId = null;
+                        let maxVotes = -1;
+                        Object.entries(voteCounts).forEach(([optId, count]) => {
+                          if (count > maxVotes) {
+                            maxVotes = count;
+                            winningId = optId;
+                          }
+                        });
+                        
+                        const winningOption = currentIssue.options.find(o => o.id === winningId);
+                        
+                        return (
+                          <div style={{ marginTop: '12px' }}>
+                            <p style={{ color: '#166534', fontSize: '0.875rem', textAlign: 'center' }}>
+                              <strong>Vote Results:</strong>
+                            </p>
+                            {currentIssue.options.map((opt, idx) => (
+                              <p key={opt.id} style={{ 
+                                color: opt.id === winningId ? '#166534' : '#64748b',
+                                fontSize: '0.875rem',
+                                textAlign: 'center',
+                                fontWeight: opt.id === winningId ? 'bold' : 'normal'
+                              }}>
+                                {opt.id === winningId ? '🏆 ' : ''}
+                                Option {String.fromCharCode(65 + idx)}: {voteCounts[opt.id]} vote{voteCounts[opt.id] !== 1 ? 's' : ''}
+                                {opt.id === winningId ? ' - WINNER!' : ''}
+                              </p>
+                            ))}
+                            {winningOption && (
+                              <div style={{ marginTop: '12px', padding: '12px', background: '#f0fdf4', borderRadius: '6px' }}>
+                                <p style={{ fontSize: '0.875rem', color: '#166534' }}>
+                                  <strong>Adopted Policy:</strong> {winningOption.text}
+                                </p>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })()}
+                    </div>
+                    
+                    <div style={{ textAlign: 'center' }}>
+                      <button className={isReady ? 'btn-success' : 'btn-primary'} onClick={toggleReady} style={{ marginRight: '12px' }}>
+                        {isReady ? '✓ Ready' : 'Mark Ready'}
+                      </button>
+                      
+                      {gameStateData.readyPlayers.length === Object.keys(gameStateData.players).length && (
+                        <button className="btn-success" onClick={advanceRound}>
+                          {gameStateData.currentRound < issues.length ? 'Next Round →' : 'See Results'}
+                        </button>
+                      )}
+                    </div>
+                    
+                    <p style={{ textAlign: 'center', marginTop: '12px', fontSize: '0.875rem', color: '#64748b' }}>
+                      {gameStateData.readyPlayers.length} / {Object.keys(gameStateData.players).length} ready
+                    </p>
+                  </div>
+                )}
+              </div>
+            </div>
+          );
+        };
+
+        function initializeApp() {
+          ReactDOM.render(<BrettonWoodsMultiplayer />, document.getElementById('root'));
+        }
+    </script>
+</body>
+</html>
