@@ -25,7 +25,7 @@ let gameState = {
   votes: {},
   readyPlayers: [],
   gamePhase: 'lobby', // lobby, voting, results, phase2, complete
-  scores: { USA: 0, UK: 0, USSR: 0, France: 0, China: 0 },
+  scores: { USA: 0, UK: 0, USSR: 0, France: 0, China: 0, India: 0, Argentina: 0 },
   roundHistory: [],
   // User authentication
   users: {}, // username -> { password: hashedPassword, playerId: string, createdAt: timestamp }
@@ -248,7 +248,7 @@ io.on('connection', (socket) => {
       votes: {},
       readyPlayers: [],
       gamePhase: 'lobby',
-      scores: { USA: 0, UK: 0, USSR: 0, France: 0, China: 0 },
+      scores: { USA: 0, UK: 0, USSR: 0, France: 0, China: 0, India: 0, Argentina: 0 },
       roundHistory: [],
       users: savedUsers, // Keep user accounts
       phase2: {
@@ -293,14 +293,8 @@ io.on('connection', (socket) => {
         gameState.phase2.currentYear++;
         gameState.readyPlayers = [];
       } else {
-        // End of Phase 2 - Award China survival bonus
-        Object.keys(gameState.players).forEach(playerId => {
-          const player = gameState.players[playerId];
-          if (player.country === 'China') {
-            gameState.scores.China += 30; // Survival bonus
-            console.log(`China awarded +30 points for navigating civil war and reconstruction`);
-          }
-        });
+        // End of Phase 2 - Calculate achievements and bonuses
+        calculateFinalAchievements();
         gameState.gamePhase = 'complete';
       }
       
@@ -346,9 +340,19 @@ function initializePhase2() {
     gameState.phase2.yearlyData[1946][country] = {
       gdpGrowth: 0,
       goldReserves: initialData.goldReserves,
-      unemployment: country === 'USA' ? 3.9 : country === 'UK' ? 2.5 : country === 'USSR' ? 0 : country === 'France' ? 4.5 : 5.0,
+      unemployment: country === 'USA' ? 3.9 : 
+                    country === 'UK' ? 2.5 : 
+                    country === 'USSR' ? 0 : 
+                    country === 'France' ? 4.5 : 
+                    country === 'India' ? 8.0 :
+                    country === 'Argentina' ? 5.5 : 5.0,
       tradeBalance: initialData.tradeBalance,
-      inflation: country === 'USA' ? 8.3 : country === 'UK' ? 3.1 : country === 'USSR' ? 0 : country === 'France' ? 50.0 : 20.0,
+      inflation: country === 'USA' ? 8.3 : 
+                 country === 'UK' ? 3.1 : 
+                 country === 'USSR' ? 0 : 
+                 country === 'France' ? 50.0 : 
+                 country === 'India' ? 12.0 :
+                 country === 'Argentina' ? 4.0 : 20.0,
       industrialOutput: initialData.industrialOutput
     };
   });
@@ -477,8 +481,13 @@ function calculateYearEconomics() {
     
     // Update industrial output
     let industrialOutput = prevData.industrialOutput;
+    const prevIndustrialOutput = prevData.industrialOutput;
     industrialOutput += gdpGrowth * 0.5;
     industrialOutput = Math.max(0, industrialOutput);
+    const outputGrowth = industrialOutput - prevIndustrialOutput;
+    
+    // Calculate gold change
+    const goldChange = goldReserves - prevData.goldReserves;
     
     // Store results
     gameState.phase2.yearlyData[nextYear][country] = {
@@ -491,15 +500,31 @@ function calculateYearEconomics() {
     };
     
     // Update country score based on performance
-    const performanceScore = calculatePerformanceScore(gdpGrowth, unemployment, inflation, tradeBalance);
-    gameState.scores[country] += performanceScore;
+    const performanceResult = calculatePerformanceScore(
+      gdpGrowth, 
+      unemployment, 
+      inflation, 
+      tradeBalance,
+      goldChange,
+      outputGrowth
+    );
+    
+    // Store year score and breakdown for later display
+    if (!gameState.phase2.yearScores) gameState.phase2.yearScores = {};
+    if (!gameState.phase2.yearScores[nextYear]) gameState.phase2.yearScores[nextYear] = {};
+    gameState.phase2.yearScores[nextYear][country] = {
+      total: performanceResult.score,
+      breakdown: performanceResult.breakdown
+    };
+    
+    gameState.scores[country] += performanceResult.score;
   });
 }
 
 // Calculate bonus from Bretton Woods agreements
 function calculateAgreementBonus() {
   const bonus = {};
-  const countries = ['USA', 'UK', 'USSR', 'France', 'China'];
+  const countries = ['USA', 'UK', 'USSR', 'France', 'China', 'India', 'Argentina'];
   
   // Countries that got favorable agreements get economic boost
   countries.forEach(country => {
@@ -511,35 +536,295 @@ function calculateAgreementBonus() {
   return bonus;
 }
 
-// Calculate performance score for the year
-function calculatePerformanceScore(gdpGrowth, unemployment, inflation, tradeBalance) {
+// Calculate performance score for the year (enhanced system)
+function calculatePerformanceScore(gdpGrowth, unemployment, inflation, tradeBalance, goldChange, outputGrowth) {
   let score = 0;
+  let breakdown = {};
   
-  // GDP growth (target: 3-5%)
-  if (gdpGrowth > 5) score += 5;
-  else if (gdpGrowth > 3) score += 10; // Sweet spot
-  else if (gdpGrowth > 1) score += 5;
-  else if (gdpGrowth > 0) score += 2;
+  // GDP Growth (0-15 points) - Sweet spot: 5-7%
+  if (gdpGrowth >= 5 && gdpGrowth <= 7) {
+    score += 15;
+    breakdown.gdp = 15;
+  } else if (gdpGrowth >= 3 && gdpGrowth < 5) {
+    score += 12;
+    breakdown.gdp = 12;
+  } else if (gdpGrowth > 7) {
+    score += 8;
+    breakdown.gdp = 8;
+  } else if (gdpGrowth >= 1 && gdpGrowth < 3) {
+    score += 6;
+    breakdown.gdp = 6;
+  } else if (gdpGrowth >= 0 && gdpGrowth < 1) {
+    score += 2;
+    breakdown.gdp = 2;
+  } else {
+    score -= 5;
+    breakdown.gdp = -5;
+  }
   
-  // Unemployment (target: under 5%)
-  if (unemployment < 3) score += 10;
-  else if (unemployment < 5) score += 8;
-  else if (unemployment < 7) score += 4;
-  else if (unemployment < 10) score += 2;
+  // Unemployment (0-15 points) - Target: 2-4%
+  if (unemployment >= 2 && unemployment <= 4) {
+    score += 15;
+    breakdown.unemployment = 15;
+  } else if (unemployment < 2) {
+    score += 10;
+    breakdown.unemployment = 10;
+  } else if (unemployment > 4 && unemployment <= 6) {
+    score += 12;
+    breakdown.unemployment = 12;
+  } else if (unemployment > 6 && unemployment <= 8) {
+    score += 6;
+    breakdown.unemployment = 6;
+  } else if (unemployment > 8 && unemployment <= 10) {
+    score += 2;
+    breakdown.unemployment = 2;
+  } else {
+    score -= 3;
+    breakdown.unemployment = -3;
+  }
   
-  // Inflation (target: 2-4%)
-  if (inflation > 10) score -= 5;
-  else if (inflation > 6) score -= 2;
-  else if (inflation >= 2 && inflation <= 4) score += 8;
-  else if (inflation < 2) score += 4; // Deflation risk
+  // Inflation (0-12 points) - Goldilocks: 1-3%
+  if (inflation >= 1 && inflation <= 3) {
+    score += 12;
+    breakdown.inflation = 12;
+  } else if (inflation > 3 && inflation <= 5) {
+    score += 10;
+    breakdown.inflation = 10;
+  } else if (inflation > 0 && inflation < 1) {
+    score += 5;
+    breakdown.inflation = 5;
+  } else if (inflation > 5 && inflation <= 7) {
+    score += 4;
+    breakdown.inflation = 4;
+  } else if (inflation > 7 && inflation <= 10) {
+    score += 0;
+    breakdown.inflation = 0;
+  } else if (inflation > 10) {
+    score -= 8;
+    breakdown.inflation = -8;
+  } else {
+    score -= 5;
+    breakdown.inflation = -5;
+  }
   
-  // Trade balance (surplus is good)
-  if (tradeBalance > 1000) score += 5;
-  else if (tradeBalance > 0) score += 3;
-  else if (tradeBalance > -1000) score += 1;
+  // Trade Balance (0-10 points)
+  if (tradeBalance > 2000) {
+    score += 10;
+    breakdown.trade = 10;
+  } else if (tradeBalance > 1000) {
+    score += 8;
+    breakdown.trade = 8;
+  } else if (tradeBalance > 0) {
+    score += 6;
+    breakdown.trade = 6;
+  } else if (tradeBalance > -500) {
+    score += 4;
+    breakdown.trade = 4;
+  } else if (tradeBalance > -1500) {
+    score += 2;
+    breakdown.trade = 2;
+  } else {
+    score += 0;
+    breakdown.trade = 0;
+  }
   
-  return score;
+  // Gold Reserves Change (0-5 points)
+  if (goldChange > 1000) {
+    score += 5;
+    breakdown.gold = 5;
+  } else if (goldChange > 500) {
+    score += 3;
+    breakdown.gold = 3;
+  } else if (goldChange > 0) {
+    score += 1;
+    breakdown.gold = 1;
+  } else if (goldChange > -500) {
+    score += 0;
+    breakdown.gold = 0;
+  } else {
+    score -= 2;
+    breakdown.gold = -2;
+  }
+  
+  // Industrial Output Growth (0-3 points)
+  if (outputGrowth >= 10) {
+    score += 3;
+    breakdown.output = 3;
+  } else if (outputGrowth >= 5) {
+    score += 2;
+    breakdown.output = 2;
+  } else if (outputGrowth >= 2) {
+    score += 1;
+    breakdown.output = 1;
+  } else if (outputGrowth >= 0) {
+    score += 0;
+    breakdown.output = 0;
+  } else {
+    score -= 1;
+    breakdown.output = -1;
+  }
+  
+  return { score, breakdown };
 }
+
+// Calculate final achievements and bonuses at end of Phase 2
+function calculateFinalAchievements() {
+  if (!gameState.phase2.achievements) {
+    gameState.phase2.achievements = {};
+  }
+  
+  const countries = Object.keys(gameState.players).map(pid => gameState.players[pid].country);
+  
+  countries.forEach(country => {
+    const achievements = [];
+    let bonusPoints = 0;
+    
+    // Get all years data for this country
+    const years = [];
+    for (let year = 1946; year <= 1952; year++) {
+      if (gameState.phase2.yearlyData[year] && gameState.phase2.yearlyData[year][country]) {
+        years.push(gameState.phase2.yearlyData[year][country]);
+      }
+    }
+    
+    if (years.length === 0) return;
+    
+    // Calculate averages
+    const avgGDP = years.reduce((sum, y) => sum + y.gdpGrowth, 0) / years.length;
+    const avgUnemployment = years.reduce((sum, y) => sum + y.unemployment, 0) / years.length;
+    const avgInflation = years.reduce((sum, y) => sum + y.inflation, 0) / years.length;
+    
+    // Achievement: Golden Age (100 points)
+    if (avgGDP > 5 && avgUnemployment < 4 && avgInflation >= 1 && avgInflation <= 4 && 
+        years.every(y => y.gdpGrowth > 0)) {
+      achievements.push({ name: 'Golden Age', description: 'Exceptional economic performance', points: 100 });
+      bonusPoints += 100;
+    }
+    
+    // Achievement: Stable Prosperity (60 points)
+    else if (years.every(y => y.gdpGrowth > 0) && 
+             years.every(y => y.inflation <= 8) &&
+             years.every(y => y.unemployment <= 10)) {
+      achievements.push({ name: 'Stable Prosperity', description: 'Maintained stability all years', points: 60 });
+      bonusPoints += 60;
+    }
+    
+    // Achievement: Trade Champion (40 points)
+    const allPositiveTrade = years.every(y => y.tradeBalance > 0);
+    const totalTradeSurplus = years.reduce((sum, y) => sum + Math.max(0, y.tradeBalance), 0);
+    if (allPositiveTrade && totalTradeSurplus > 5000) {
+      achievements.push({ name: 'Trade Champion', description: 'Trade surplus all years', points: 40 });
+      bonusPoints += 40;
+    }
+    
+    // Achievement: Phoenix Rising (50 points)
+    const startGDP = gameData.economicData[country].gdp;
+    const endGDP = startGDP + years.reduce((sum, y) => sum + y.gdpGrowth, 0);
+    if (endGDP / startGDP > 1.3) {
+      achievements.push({ name: 'Phoenix Rising', description: '30%+ GDP growth', points: 50 });
+      bonusPoints += 50;
+    }
+    
+    // China-specific achievements
+    if (country === 'China') {
+      // Survived the Storm (automatic)
+      achievements.push({ name: 'Survived the Storm', description: 'Completed Phase 2 as China', points: 30 });
+      bonusPoints += 30;
+      
+      // Great Leap (50 points) - High growth in reconstruction years
+      const reconstructionYears = [1950, 1951, 1952].map(y => 
+        gameState.phase2.yearlyData[y] ? gameState.phase2.yearlyData[y][country] : null
+      ).filter(Boolean);
+      
+      if (reconstructionYears.length >= 3) {
+        const avgReconstructionGDP = reconstructionYears.reduce((sum, y) => sum + y.gdpGrowth, 0) / reconstructionYears.length;
+        if (avgReconstructionGDP > 8) {
+          achievements.push({ name: 'Great Leap', description: 'Exceptional post-civil war recovery', points: 50 });
+          bonusPoints += 50;
+        }
+      }
+    }
+    
+    // USA-specific achievements
+    if (country === 'USA') {
+      // Bretton Woods Leader (40 points)
+      const alwaysHighestGold = years.every((_, idx) => {
+        const year = 1946 + idx;
+        const yearData = gameState.phase2.yearlyData[year];
+        if (!yearData) return false;
+        return Object.keys(yearData).every(c => 
+          c === 'USA' || yearData['USA'].goldReserves >= yearData[c].goldReserves
+        );
+      });
+      
+      if (alwaysHighestGold) {
+        achievements.push({ name: 'Bretton Woods Leader', description: 'Maintained gold supremacy', points: 40 });
+        bonusPoints += 40;
+      }
+    }
+    
+    // USSR-specific achievement
+    if (country === 'USSR') {
+      // Soviet Miracle (40 points)
+      if (avgGDP >= 6) {
+        achievements.push({ name: 'Soviet Miracle', description: 'Command economy excellence', points: 40 });
+        bonusPoints += 40;
+      }
+    }
+    
+    // India-specific achievements
+    if (country === 'India') {
+      // Post-Colonial Success (40 points) - Strong growth after independence
+      if (avgGDP >= 5 && avgInflation < 6) {
+        achievements.push({ name: 'Post-Colonial Success', description: 'Strong independent development', points: 40 });
+        bonusPoints += 40;
+      }
+      
+      // Non-Aligned Leader (30 points) - Balance without extreme policies
+      const avgTariff = years.reduce((sum, y) => {
+        const year = 1946 + years.indexOf(y);
+        const policy = gameState.phase2.policies[year]?.[country];
+        return sum + (policy?.tariffRate || 0);
+      }, 0) / years.length;
+      
+      if (avgTariff >= 15 && avgTariff <= 35) {
+        achievements.push({ name: 'Non-Aligned Leader', description: 'Balanced economic sovereignty', points: 30 });
+        bonusPoints += 30;
+      }
+    }
+    
+    // Argentina-specific achievements
+    if (country === 'Argentina') {
+      // Agricultural Powerhouse (40 points) - Strong trade performance
+      const totalTrade = years.reduce((sum, y) => sum + Math.max(0, y.tradeBalance), 0);
+      if (totalTrade > 8000 && avgGDP >= 4) {
+        achievements.push({ name: 'Agricultural Powerhouse', description: 'Export-led prosperity', points: 40 });
+        bonusPoints += 40;
+      }
+      
+      // Economic Independence (30 points) - Avoid debt while growing
+      const finalGold = years[years.length - 1].goldReserves;
+      const startGold = gameData.economicData[country].goldReserves;
+      if (finalGold >= startGold && avgGDP >= 4) {
+        achievements.push({ name: 'Economic Independence', description: 'Self-sufficient growth', points: 30 });
+        bonusPoints += 30;
+      }
+    }
+    
+    // Store achievements
+    gameState.phase2.achievements[country] = {
+      list: achievements,
+      totalBonus: bonusPoints
+    };
+    
+    // Add bonus to score
+    gameState.scores[country] += bonusPoints;
+    
+    console.log(`${country} earned ${bonusPoints} achievement bonus points`);
+    achievements.forEach(a => console.log(`  - ${a.name}: ${a.points} pts`));
+  });
+}
+
 
 // Calculate scores for current round (Phase 1)
 function calculateScoresForCurrentRound() {

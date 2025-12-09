@@ -897,31 +897,191 @@
           if (gameStateData.gamePhase === 'complete') {
             const sortedScores = Object.entries(gameStateData.scores).sort((a, b) => b[1] - a[1]);
             const winner = sortedScores[0];
+            const myCountry = playerCountry;
+            const myRank = sortedScores.findIndex(([c]) => c === myCountry) + 1;
+            const myAchievements = gameStateData.phase2?.achievements?.[myCountry];
 
             return (
               <div className="container">
+                <UserDisplay />
                 <ConnectionStatus />
                 <div className="header">
-                  <h1>🏆 Conference Results</h1>
-                  <p>Final Outcomes</p>
+                  <h1>🏆 Game Complete - Final Results</h1>
+                  <p>Bretton Woods Simulation 1944-1952</p>
                 </div>
 
                 <div className="card">
-                  <h2 style={{ textAlign: 'center', marginBottom: '20px' }}>
-                    {countries[winner[0]].name} Wins!
-                  </h2>
-
-                  <div className="final-scores">
-                    {sortedScores.map(([country, score]) => (
-                      <div key={country} className={`score-card ${countries[country].color}`}>
-                        <h3>{countries[country].name}</h3>
-                        <div className="score-value">{score}</div>
-                      </div>
-                    ))}
+                  <div style={{ textAlign: 'center', marginBottom: '40px' }}>
+                    <h2 style={{ fontSize: '2rem', marginBottom: '16px', color: '#1e293b' }}>
+                      {myRank === 1 ? '🥇' : myRank === 2 ? '🥈' : myRank === 3 ? '🥉' : ''}
+                      {' '}{countries[myCountry].name}
+                    </h2>
+                    <div style={{ fontSize: '1.25rem', color: '#64748b', marginBottom: '8px' }}>
+                      Rank: {myRank} of {sortedScores.length}
+                    </div>
+                    <div style={{ fontSize: '3rem', fontWeight: 'bold', color: '#16a34a' }}>
+                      {gameStateData.scores[myCountry]} points
+                    </div>
                   </div>
 
-                  <div style={{ textAlign: 'center' }}>
-                    <button className="btn-primary" onClick={resetGame}>🔄 Play Again</button>
+                  {/* Score Breakdown */}
+                  <div style={{ marginBottom: '40px', padding: '24px', background: '#f8fafc', borderRadius: '8px' }}>
+                    <h3 style={{ fontSize: '1.25rem', marginBottom: '20px', textAlign: 'center' }}>
+                      📊 Your Score Breakdown
+                    </h3>
+                    
+                    <div style={{ display: 'grid', gap: '16px', maxWidth: '500px', margin: '0 auto' }}>
+                      {/* Phase 1 Score */}
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px', background: 'white', borderRadius: '6px' }}>
+                        <div>
+                          <div style={{ fontWeight: 'bold' }}>Phase 1: Bretton Woods Conference</div>
+                          <div style={{ fontSize: '0.875rem', color: '#64748b' }}>Negotiations (6 rounds)</div>
+                        </div>
+                        <div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#3b82f6' }}>
+                          {/* Calculate Phase 1 score (assuming Phase 2 started after round 6) */}
+                          {(() => {
+                            // Phase 1 score is total before Phase 2 annual scores were added
+                            let phase1Score = 0;
+                            if (gameStateData.phase2?.yearScores) {
+                              const phase2Years = Object.keys(gameStateData.phase2.yearScores);
+                              const totalPhase2 = phase2Years.reduce((sum, year) => {
+                                return sum + (gameStateData.phase2.yearScores[year][myCountry]?.total || 0);
+                              }, 0);
+                              const achievementBonus = myAchievements?.totalBonus || 0;
+                              phase1Score = gameStateData.scores[myCountry] - totalPhase2 - achievementBonus;
+                            } else {
+                              phase1Score = Math.floor(gameStateData.scores[myCountry] * 0.2); // Estimate
+                            }
+                            return phase1Score;
+                          })()}
+                        </div>
+                      </div>
+
+                      {/* Phase 2 Annual Scores */}
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px', background: 'white', borderRadius: '6px' }}>
+                        <div>
+                          <div style={{ fontWeight: 'bold' }}>Phase 2: Economic Management</div>
+                          <div style={{ fontSize: '0.875rem', color: '#64748b' }}>
+                            Annual performance (1946-1952)
+                          </div>
+                        </div>
+                        <div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#8b5cf6' }}>
+                          {(() => {
+                            if (gameStateData.phase2?.yearScores) {
+                              return Object.keys(gameStateData.phase2.yearScores).reduce((sum, year) => {
+                                return sum + (gameStateData.phase2.yearScores[year][myCountry]?.total || 0);
+                              }, 0);
+                            }
+                            return 0;
+                          })()}
+                        </div>
+                      </div>
+
+                      {/* Achievement Bonus */}
+                      {myAchievements && myAchievements.totalBonus > 0 && (
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px', background: 'white', borderRadius: '6px', border: '2px solid #fbbf24' }}>
+                          <div>
+                            <div style={{ fontWeight: 'bold', color: '#d97706' }}>🏅 Achievement Bonuses</div>
+                            <div style={{ fontSize: '0.875rem', color: '#92400e' }}>
+                              {myAchievements.list.length} achievement{myAchievements.list.length !== 1 ? 's' : ''} unlocked
+                            </div>
+                          </div>
+                          <div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#d97706' }}>
+                            +{myAchievements.totalBonus}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Achievements */}
+                  {myAchievements && myAchievements.list.length > 0 && (
+                    <div style={{ marginBottom: '40px', padding: '24px', background: '#fef3c7', borderRadius: '8px', border: '2px solid #fbbf24' }}>
+                      <h3 style={{ fontSize: '1.25rem', marginBottom: '20px', textAlign: 'center', color: '#92400e' }}>
+                        🏆 Achievements Unlocked
+                      </h3>
+                      <div style={{ display: 'grid', gap: '12px', maxWidth: '600px', margin: '0 auto' }}>
+                        {myAchievements.list.map((achievement, idx) => (
+                          <div key={idx} style={{ 
+                            padding: '16px', 
+                            background: 'white', 
+                            borderRadius: '8px',
+                            border: '2px solid #fbbf24',
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            alignItems: 'center'
+                          }}>
+                            <div>
+                              <div style={{ fontWeight: 'bold', fontSize: '1.125rem', color: '#92400e' }}>
+                                {achievement.name}
+                              </div>
+                              <div style={{ fontSize: '0.875rem', color: '#78350f', marginTop: '4px' }}>
+                                {achievement.description}
+                              </div>
+                            </div>
+                            <div style={{ 
+                              fontSize: '1.5rem', 
+                              fontWeight: 'bold', 
+                              color: '#d97706',
+                              minWidth: '80px',
+                              textAlign: 'right'
+                            }}>
+                              +{achievement.points}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Final Standings */}
+                  <div style={{ marginBottom: '30px' }}>
+                    <h3 style={{ fontSize: '1.25rem', marginBottom: '20px', textAlign: 'center' }}>
+                      🌍 Final Standings
+                    </h3>
+                    <div style={{ display: 'grid', gap: '12px', maxWidth: '600px', margin: '0 auto' }}>
+                      {sortedScores.map(([country, score], idx) => {
+                        const countryAchievements = gameStateData.phase2?.achievements?.[country];
+                        const isMyCountry = country === myCountry;
+                        
+                        return (
+                          <div key={country} style={{
+                            padding: '16px',
+                            background: isMyCountry ? '#dbeafe' : '#f8fafc',
+                            border: isMyCountry ? '3px solid #3b82f6' : '1px solid #e2e8f0',
+                            borderRadius: '8px',
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            alignItems: 'center'
+                          }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                              <div style={{ fontSize: '1.5rem', fontWeight: 'bold', minWidth: '40px' }}>
+                                {idx === 0 ? '🥇' : idx === 1 ? '🥈' : idx === 2 ? '🥉' : `${idx + 1}.`}
+                              </div>
+                              <div>
+                                <div style={{ fontWeight: 'bold', fontSize: '1.125rem' }}>
+                                  {countries[country].name}
+                                </div>
+                                {countryAchievements && countryAchievements.list.length > 0 && (
+                                  <div style={{ fontSize: '0.75rem', color: '#64748b', marginTop: '2px' }}>
+                                    🏅 {countryAchievements.list.length} achievement{countryAchievements.list.length !== 1 ? 's' : ''}
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                            <div style={{ fontSize: '1.75rem', fontWeight: 'bold', color: '#16a34a' }}>
+                              {score}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  <div style={{ textAlign: 'center', marginTop: '30px' }}>
+                    <button onClick={() => socket.emit('resetGame')} className="btn-primary">
+                      🔄 Play Again
+                    </button>
                   </div>
                 </div>
               </div>

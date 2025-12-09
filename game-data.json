@@ -54,6 +54,28 @@
         "Establish modern financial institutions"
       ],
       "economicPosition": "Underdeveloped, civil war looming, minimal influence"
+    },
+    "India": {
+      "name": "India",
+      "color": "bg-orange-600",
+      "textColor": "text-orange-600",
+      "objectives": [
+        "Secure post-colonial economic independence",
+        "Obtain development financing for industrialization",
+        "Gain voice for developing nations"
+      ],
+      "economicPosition": "British colony nearing independence, agricultural economy"
+    },
+    "Argentina": {
+      "name": "Argentina",
+      "color": "bg-cyan-600",
+      "textColor": "text-cyan-600",
+      "objectives": [
+        "Protect agricultural export interests",
+        "Maintain economic sovereignty from US influence",
+        "Secure fair terms for commodity exporters"
+      ],
+      "economicPosition": "Prosperous neutral during war, creditor nation, strong agriculture"
     }
   },
   "economicData": {
@@ -91,6 +113,20 @@
       "gdp": 45000,
       "warDebt": 35000,
       "industrialOutput": 8
+    },
+    "India": {
+      "goldReserves": 800,
+      "tradeBalance": 400,
+      "gdp": 55000,
+      "warDebt": 20000,
+      "industrialOutput": 12
+    },
+    "Argentina": {
+      "goldReserves": 1200,
+      "tradeBalance": 1500,
+      "gdp": 32000,
+      "warDebt": 5000,
+      "industrialOutput": 18
     }
   },
   "issues": [
