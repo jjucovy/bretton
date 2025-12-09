@@ -4,6 +4,7 @@ const http = require('http');
 const socketIo = require('socket.io');
 const path = require('path');
 const fs = require('fs');
+const crypto = require('crypto');
 
 const app = express();
 const server = http.createServer(app);
@@ -26,6 +27,8 @@ let gameState = {
   gamePhase: 'lobby', // lobby, voting, results, phase2, complete
   scores: { USA: 0, UK: 0, USSR: 0, France: 0, China: 0 },
   roundHistory: [],
+  // User authentication
+  users: {}, // username -> { password: hashedPassword, playerId: string, createdAt: timestamp }
   // Phase 2: Post-war economic management (1946-1952)
   phase2: {
     active: false,
@@ -62,6 +65,15 @@ function saveGameState() {
 // Load state on startup
 loadGameState();
 
+// Password hashing functions
+function hashPassword(password) {
+  return crypto.createHash('sha256').update(password).digest('hex');
+}
+
+function verifyPassword(password, hashedPassword) {
+  return hashPassword(password) === hashedPassword;
+}
+
 // Broadcast state to all connected clients
 function broadcastState() {
   io.emit('stateUpdate', gameState);
@@ -74,6 +86,62 @@ io.on('connection', (socket) => {
   
   // Send current state to newly connected client
   socket.emit('stateUpdate', gameState);
+  
+  // Register new user
+  socket.on('register', ({ username, password }) => {
+    if (!username || !password) {
+      socket.emit('registerResult', { success: false, message: 'Username and password required' });
+      return;
+    }
+    
+    if (username.length < 3) {
+      socket.emit('registerResult', { success: false, message: 'Username must be at least 3 characters' });
+      return;
+    }
+    
+    if (password.length < 4) {
+      socket.emit('registerResult', { success: false, message: 'Password must be at least 4 characters' });
+      return;
+    }
+    
+    if (gameState.users[username]) {
+      socket.emit('registerResult', { success: false, message: 'Username already taken' });
+      return;
+    }
+    
+    const playerId = `player_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    gameState.users[username] = {
+      password: hashPassword(password),
+      playerId: playerId,
+      createdAt: Date.now()
+    };
+    
+    broadcastState();
+    socket.emit('registerResult', { success: true, playerId: playerId, username: username });
+    console.log(`New user registered: ${username}`);
+  });
+  
+  // Login existing user
+  socket.on('login', ({ username, password }) => {
+    if (!username || !password) {
+      socket.emit('loginResult', { success: false, message: 'Username and password required' });
+      return;
+    }
+    
+    const user = gameState.users[username];
+    if (!user) {
+      socket.emit('loginResult', { success: false, message: 'Invalid username or password' });
+      return;
+    }
+    
+    if (!verifyPassword(password, user.password)) {
+      socket.emit('loginResult', { success: false, message: 'Invalid username or password' });
+      return;
+    }
+    
+    socket.emit('loginResult', { success: true, playerId: user.playerId, username: username });
+    console.log(`User logged in: ${username}`);
+  });
   
   // Join game
   socket.on('joinGame', ({ playerId, country }) => {
@@ -171,6 +239,7 @@ io.on('connection', (socket) => {
   
   // Reset game
   socket.on('resetGame', () => {
+    const savedUsers = gameState.users; // Preserve user accounts
     gameState = {
       gameId: Date.now(),
       gameStarted: false,
@@ -181,6 +250,7 @@ io.on('connection', (socket) => {
       gamePhase: 'lobby',
       scores: { USA: 0, UK: 0, USSR: 0, France: 0, China: 0 },
       roundHistory: [],
+      users: savedUsers, // Keep user accounts
       phase2: {
         active: false,
         currentYear: 1946,
