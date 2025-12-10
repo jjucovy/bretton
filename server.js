@@ -111,26 +111,80 @@ function loadGameState() {
   try {
     if (fs.existsSync(STATE_FILE)) {
       const data = fs.readFileSync(STATE_FILE, 'utf8');
-      gameState = JSON.parse(data);
-      console.log('Game state loaded from file');
+      const loadedState = JSON.parse(data);
+      
+      // Merge loaded state with defaults (preserves new features)
+      gameState = {
+        ...gameState, // Default structure with military deployments
+        ...loadedState, // Loaded data
+        // Ensure critical nested objects exist
+        users: loadedState.users || {},
+        players: loadedState.players || {},
+        votes: loadedState.votes || {},
+        scores: { ...gameState.scores, ...(loadedState.scores || {}) },
+        phase2: {
+          ...gameState.phase2,
+          ...(loadedState.phase2 || {})
+        },
+        militaryDeployments: {
+          ...gameState.militaryDeployments,
+          ...(loadedState.militaryDeployments || {})
+        }
+      };
+      
+      console.log('✅ Game state loaded from file');
+      console.log(`   - Users: ${Object.keys(gameState.users).length}`);
+      console.log(`   - Players in game: ${Object.keys(gameState.players).length}`);
+      console.log(`   - Game phase: ${gameState.gamePhase}`);
+    } else {
+      console.log('📝 No saved state found, using defaults');
     }
   } catch (err) {
-    console.error('Error loading game state:', err);
+    console.error('❌ Error loading game state:', err);
+    console.log('⚠️  Using default game state');
   }
 }
 
 // Save game state to file
 function saveGameState() {
   try {
+    // Create backup before saving
+    if (fs.existsSync(STATE_FILE)) {
+      const backupFile = STATE_FILE.replace('.json', '-backup.json');
+      fs.copyFileSync(STATE_FILE, backupFile);
+    }
+    
     fs.writeFileSync(STATE_FILE, JSON.stringify(gameState, null, 2));
-    console.log('Game state saved to file');
+    console.log('💾 Game state saved to file');
   } catch (err) {
-    console.error('Error saving game state:', err);
+    console.error('❌ Error saving game state:', err);
   }
 }
 
 // Load state on startup
 loadGameState();
+
+// Auto-save every 2 minutes
+const AUTO_SAVE_INTERVAL = 2 * 60 * 1000; // 2 minutes
+setInterval(() => {
+  saveGameState();
+  console.log('🔄 Auto-save completed');
+}, AUTO_SAVE_INTERVAL);
+
+// Save on server shutdown
+process.on('SIGINT', () => {
+  console.log('\n⚠️  Server shutting down...');
+  saveGameState();
+  console.log('✅ Final save completed');
+  process.exit(0);
+});
+
+process.on('SIGTERM', () => {
+  console.log('\n⚠️  Server terminating...');
+  saveGameState();
+  console.log('✅ Final save completed');
+  process.exit(0);
+});
 
 // Password hashing functions
 function hashPassword(password) {
@@ -212,9 +266,12 @@ io.on('connection', (socket) => {
     let resumeData = null;
     
     if (existingPlayer) {
-      // Player is resuming - update socket ID
+      // Player is resuming - update socket ID and mark as reconnected
       existingPlayer.socketId = socket.id;
       existingPlayer.lastLogin = Date.now();
+      existingPlayer.disconnected = false; // Mark as reconnected
+      delete existingPlayer.disconnectedAt;
+      
       resumeData = {
         country: existingPlayer.country,
         gamePhase: gameState.gamePhase,
@@ -222,7 +279,7 @@ io.on('connection', (socket) => {
         currentYear: gameState.phase2.currentYear,
         isResuming: true
       };
-      console.log(`User ${username} resumed as ${existingPlayer.country}`);
+      console.log(`User ${username} reconnected as ${existingPlayer.country}`);
     }
     
     socket.emit('loginResult', { 
@@ -245,9 +302,11 @@ io.on('connection', (socket) => {
     const existingPlayer = gameState.players[playerId];
     
     if (existingPlayer) {
-      // Player exists in game - update socket ID and resume
+      // Player exists in game - update socket ID, mark as reconnected, and resume
       existingPlayer.socketId = socket.id;
       existingPlayer.lastLogin = Date.now();
+      existingPlayer.disconnected = false; // Mark as reconnected
+      delete existingPlayer.disconnectedAt;
       
       socket.emit('resumeCheck', {
         shouldResume: true,
@@ -257,8 +316,9 @@ io.on('connection', (socket) => {
         currentYear: gameState.phase2.currentYear
       });
       
-      console.log(`Auto-resuming player ${playerId} as ${existingPlayer.country}`);
+      console.log(`Auto-resuming player ${playerId} as ${existingPlayer.country} (was ${existingPlayer.disconnected ? 'disconnected' : 'connected'})`);
       broadcastState();
+      saveGameState(); // Save reconnection
     } else {
       socket.emit('resumeCheck', { shouldResume: false });
     }
@@ -426,16 +486,23 @@ io.on('connection', (socket) => {
   
   // Disconnect
   socket.on('disconnect', () => {
-    // Find and remove player by socket ID
+    // Find player by socket ID
     const playerId = Object.keys(gameState.players).find(
       id => gameState.players[id].socketId === socket.id
     );
     
     if (playerId) {
-      delete gameState.players[playerId];
+      // Mark as disconnected but keep in game
+      gameState.players[playerId].disconnected = true;
+      gameState.players[playerId].disconnectedAt = Date.now();
+      
+      // Remove from ready list
       gameState.readyPlayers = gameState.readyPlayers.filter(id => id !== playerId);
+      
       broadcastState();
-      console.log(`Player ${playerId} disconnected`);
+      saveGameState(); // Save to preserve state
+      
+      console.log(`Player ${playerId} (${gameState.players[playerId].country}) disconnected - keeping in game`);
     }
     
     console.log(`Client disconnected: ${socket.id}`);
