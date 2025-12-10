@@ -183,7 +183,13 @@
                 }
               } else {
                 setIsCheckingResume(false);
-                alert(result.message);
+                
+                // Provide helpful error message
+                let errorMsg = result.message;
+                if (result.message === 'Invalid username or password') {
+                  errorMsg += '\n\nTip: If you recently registered but the server restarted, you may need to register again or click "Clear Saved Session" to start fresh.';
+                }
+                alert(errorMsg);
               }
             });
 
@@ -389,6 +395,30 @@
                       <li>Your account persists across games</li>
                     </ul>
                   </div>
+                  
+                  {/* Clear Session Button */}
+                  <div style={{ marginTop: '20px', textAlign: 'center' }}>
+                    <button
+                      onClick={() => {
+                        if (confirm('Clear saved session data? You will need to login again.')) {
+                          sessionStorage.clear();
+                          localStorage.clear();
+                          window.location.reload();
+                        }
+                      }}
+                      style={{
+                        padding: '8px 16px',
+                        background: '#fef3c7',
+                        border: '1px solid #f59e0b',
+                        borderRadius: '6px',
+                        cursor: 'pointer',
+                        fontSize: '0.875rem',
+                        color: '#92400e'
+                      }}
+                    >
+                      🗑️ Clear Saved Session
+                    </button>
+                  </div>
                 </div>
               </div>
             );
@@ -474,15 +504,17 @@
                           display: 'flex',
                           justifyContent: 'space-between',
                           padding: '12px',
-                          background: id === playerId ? '#eff6ff' : '#f8fafc',
+                          background: id === playerId ? '#eff6ff' : player.disconnected ? '#fef3c7' : '#f8fafc',
                           borderRadius: '8px',
-                          borderLeft: '4px solid ' + (id === playerId ? '#3b82f6' : '#cbd5e1')
+                          borderLeft: '4px solid ' + (id === playerId ? '#3b82f6' : player.disconnected ? '#f59e0b' : '#cbd5e1'),
+                          opacity: player.disconnected ? 0.7 : 1
                         }}>
                           <div>
                             <span className={countries[player.country]?.textColor || 'text-blue-600'} style={{ fontWeight: 'bold' }}>
                               {countries[player.country]?.name || player.country || 'Unknown'}
                             </span>
                             {id === playerId && <span style={{ marginLeft: '8px', fontSize: '0.875rem', color: '#3b82f6' }}>(You)</span>}
+                            {player.disconnected && <span style={{ marginLeft: '8px', fontSize: '0.75rem', color: '#d97706' }}>🔌 Disconnected</span>}
                           </div>
                           <div>
                             {gameStateData.readyPlayers.includes(id) ? (
