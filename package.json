@@ -2,10 +2,10 @@
   "name": "bretton-woods-multiplayer",
   "version": "1.0.0",
   "description": "Bretton Woods Conference Multiplayer Simulation with Server",
-  "main": "server.js",
+  "fix": "server-multiroom.js",
   "scripts": {
-    "start": "node server.js",
-    "dev": "nodemon server.js"
+    "start": "node server-multiroom.js",
+    "dev": "nodemon server-multiroom.js"
   },
   "keywords": [
     "education",
