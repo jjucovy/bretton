@@ -1589,7 +1589,7 @@
                     </div>
                   </div>
                   </div>
-                  ,{userRole === 'superadmin' ? (
+                  <>{userRole === 'superadmin' ? (
                     <div style={{
                       padding: '20px',
                       background: 'linear-gradient(135deg, #fee2e2 0%, #fecaca 100%)',
@@ -1654,7 +1654,7 @@
                         {isReady ? '✓ Ready (Click to Unready)' : 'Mark as Ready'}
                       </button>
                     </div>
-                  )}
+                  )}</>
                 </div>
                 </div>
               </div>
