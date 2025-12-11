@@ -1336,10 +1336,6 @@
                                 <div style={{ fontSize: '2rem', fontWeight: 'bold', color: '#64748b' }}>
                                   {gameState.voteTally?.abstain || 0}
                                 </div>
-                              </div>
-                            </div>
-
-                            {/* Your score this round */}
                             {userRole !== 'superadmin' && (
                               <div style={{
                                 padding: '20px',
@@ -1593,7 +1589,6 @@
                     </div>
                   </div>
                   </div>
-
                   {userRole === 'superadmin' ? (
                     <div style={{
                       padding: '20px',
