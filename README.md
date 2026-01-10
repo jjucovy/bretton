@@ -1,347 +1,345 @@
-# Bretton Woods Multiplayer - Server Version
+# Bretton Woods Conference Simulation - Database Version
 
-**TRUE multiplayer with server-side state storage!** 🎮🌐
+A multiplayer educational simulation of the 1944 Bretton Woods Conference, now with MySQL database backend for persistent game state.
 
-## 🌟 Key Features
+## Features
 
-✅ **Real Server** - Game state stored on server, not browser  
-✅ **True Multiplayer** - Students connect from different computers  
-✅ **Auto-Sync** - Updates in real-time via WebSockets  
-✅ **Persistent State** - Game state saved to file  
-✅ **No Manual Refresh** - Changes appear instantly  
-✅ **Connection Status** - See if connected to server  
-✅ **Robust** - Handles disconnects gracefully  
+- **User Authentication**: Login/register system for students and teachers
+- **Persistent Game State**: All game data stored in MySQL database
+- **Real-time Updates**: Automatic polling for game state changes
+- **Multiplayer Lobby**: Join games with simple 6-character codes
+- **5 Playable Nations**: USA, UK, USSR, France, China
+- **6 Historical Issues**: Negotiate the post-war economic order
+- **Score Tracking**: Points based on national interests
+- **Game Management**: Host controls, ready system, game reset
 
-## 📁 File Structure
+## Requirements
 
+- Node.js (v14 or higher)
+- MySQL 5.7+ or MariaDB 10.3+
+- Web browser (Chrome, Firefox, Safari, Edge)
+
+## Installation
+
+### 1. Database Setup
+
+First, import the database schema:
+
+```bash
+mysql -h 86.38.202.154 -u u585377912_keynes -p u585377912_bretton < bretton_woods_schema.sql
 ```
-bretton-woods-server/
-├── server.js           # Node.js server with Socket.io
-├── index.html          # Client interface
-├── styles.css          # Styling
-├── game-data.json      # Countries, issues, economic data
-├── game-state.json     # Current game state (auto-generated)
-├── package.json        # Node dependencies
-└── README.md           # This file
-```
 
-## 🚀 Quick Start (5 Minutes)
+**IMPORTANT**: Change the database password in both:
+- The database itself (ALTER USER command)
+- `server.js` (line 19)
 
-### Step 1: Install Node.js
-If you don't have Node.js installed:
-- Download from: https://nodejs.org/
-- Install the LTS version (recommended)
-- Verify: Open terminal and type `node --version`
+### 2. Backend Setup
 
-### Step 2: Install Dependencies
+Install dependencies:
+
 ```bash
 cd bretton-woods-server
 npm install
 ```
 
-This installs:
-- `express` - Web server
-- `socket.io` - Real-time communication
+Dependencies include:
+- express (web server)
+- mysql2 (database driver)
+- cors (cross-origin requests)
+- bcrypt (password hashing)
+- express-session (session management)
+- express-mysql-session (session storage)
 
-### Step 3: Start the Server
+Start the server:
+
 ```bash
 npm start
 ```
 
-You should see:
-```
-╔═══════════════════════════════════════════════════════╗
-║   Bretton Woods Multiplayer Server                   ║
-║   Server running on http://localhost:65002          ║
-║                                                       ║
-║   Students can connect by opening:                   ║
-║   http://[YOUR-IP]:65002                            ║
-║                                                       ║
-║   Press Ctrl+C to stop                               ║
-╚═══════════════════════════════════════════════════════╝
-```
+Server will run on `http://localhost:3000`
 
-### Step 4: Find Your IP Address
+For development with auto-restart:
 
-**Windows:**
-```cmd
-ipconfig
-```
-Look for "IPv4 Address" under your active connection (e.g., 192.168.1.100)
-
-**Mac/Linux:**
-```bash
-ifconfig
-```
-Look for "inet" under your active connection (e.g., 192.168.1.100)
-
-### Step 5: Students Connect
-Students open their browsers and go to:
-```
-http://[YOUR-IP]:65002
-```
-Example: `http://192.168.1.100:65002`
-
-That's it! Everyone is now connected to the same game server! 🎉
-
-## 🎮 How to Play
-
-### Teacher Setup:
-1. Start server on teacher computer
-2. Share IP address with students
-3. Monitor game progress (teacher can also play)
-
-### Student Steps:
-1. Open browser to `http://[TEACHER-IP]:65002`
-2. Wait for green "🟢 Connected" indicator
-3. Select a country
-4. Click "Mark Ready"
-5. Start playing!
-
-## 💾 Server Features
-
-### Persistent State
-- Game state automatically saves to `game-state.json`
-- If server restarts, game resumes where it left off
-- Delete `game-state.json` to start completely fresh
-
-### Real-Time Updates
-- All players see changes instantly
-- No need to refresh
-- Uses WebSocket technology
-- < 100ms latency
-
-### Disconnect Handling
-- Players who disconnect are removed
-- Reconnecting players can rejoin
-- Game continues with remaining players
-
-## 🔧 Advanced Options
-
-### Change Port
-Edit `server.js`:
-```javascript
-const PORT = process.env.PORT || 3000;  // Change 3000 to your port
-```
-
-Or set environment variable:
-```bash
-PORT=8080 npm start
-```
-
-### Development Mode (Auto-Reload)
 ```bash
 npm run dev
 ```
-Server automatically restarts when you edit files
 
-### View Game State
-```bash
-cat game-state.json
-```
-See current game state in JSON format
+### 3. Frontend Setup
 
-### Reset Game Manually
-Delete the state file:
-```bash
-rm game-state.json
-```
-Or use the in-game "Reset" button
+The React component can be integrated into your existing React app, or you can use the standalone HTML file included.
 
-## 🌐 Network Setup
+For standalone use:
 
-### Same Room (LAN):
-- All devices on same WiFi
-- Use local IP (192.168.x.x)
-- No firewall configuration needed usually
+1. Open `index.html` in a web browser
+2. Make sure the backend server is running
+3. You may need to serve the HTML file through a local server (like `python -m http.server`) if you encounter CORS issues
 
-### Different Locations (Internet):
-You'll need:
-1. **Port forwarding** on router (port 65002)
-2. **Your public IP** (google "what is my ip")
-3. **Dynamic DNS** (optional, for changing IPs)
+## Configuration
 
-**Security Note:** Only expose to internet if needed. Use strong network security.
+### Backend Configuration (server.js)
 
-### Firewall Issues:
-**Windows:**
-```
-Windows Defender Firewall → Allow an app → Add Node.js
+```javascript
+// Database connection (line 18-26)
+const pool = mysql.createPool({
+    host: 'YOUR_HOST',
+    user: 'YOUR_USERNAME',
+    password: 'YOUR_PASSWORD',  // CHANGE THIS!
+    database: 'YOUR_DATABASE',
+    // ... other settings
+});
+
+// Server port (line 11)
+const PORT = process.env.PORT || 3000;
 ```
 
-**Mac:**
-```
-System Preferences → Security & Privacy → Firewall → Firewall Options → Add node
-```
+### Frontend Configuration (BrettonWoodsGame.jsx)
 
-## 🐛 Troubleshooting
-
-### "Cannot connect to server"
-- ✅ Is server running? (Check terminal)
-- ✅ Correct IP address?
-- ✅ Same network?
-- ✅ Firewall blocking port 65002?
-
-### "🔴 Disconnected" indicator
-- ✅ Server crashed? Check terminal
-- ✅ Network issue?
-- ✅ Try refreshing page
-
-### Port already in use
-```
-Error: listen EADDRINUSE: address already in use :::65002
-```
-**Solution:** Change port or kill process:
-```bash
-# Find process using port 65002
-lsof -i :65002  # Mac/Linux
-netstat -ano | findstr :65002  # Windows
-
-# Kill it and restart
+```javascript
+// API endpoint (line 5)
+const API_BASE_URL = 'http://localhost:3000/api';
 ```
 
-### Game state corrupted
-Delete state file and restart:
-```bash
-rm game-state.json
-npm start
+If deploying to production, update this to your server's URL.
+
+## Usage
+
+### For Teachers
+
+1. **Create Account**: Register with `isTeacher` flag set to true
+2. **Create Game**: Click "Create New Game" to generate a game code
+3. **Share Code**: Give the 6-character code to students
+4. **Wait for Players**: Students join and select countries
+5. **Start Game**: Once all players are ready, click "Start Conference"
+6. **Monitor Progress**: Watch as students negotiate
+7. **Review Results**: See final scores and who succeeded
+8. **Play Again**: Reset the game to play with different strategies
+
+### For Students
+
+1. **Create Account**: Register as a student
+2. **Join Game**: Enter the game code provided by teacher
+3. **Select Country**: Choose from available nations
+4. **Mark Ready**: Indicate you're ready to start
+5. **Vote on Issues**: For each issue, support or oppose the options
+   - Green border = Favors your country (+10 if it wins)
+   - Red border = Opposes your country (-5 if it wins)
+6. **Watch Scores**: See how your decisions affect your standing
+7. **See Results**: Review final rankings and outcomes
+
+## Game Flow
+
+### Phase 1: The Conference (6 Rounds)
+
+Each round presents one historical issue from Bretton Woods:
+
+1. **Exchange Rate System**: How should currencies be valued?
+2. **International Monetary Fund**: What powers should the IMF have?
+3. **World Bank Structure**: Who controls reconstruction financing?
+4. **Capital Controls**: Should countries restrict capital flows?
+5. **Soviet Participation**: How much should USSR be included?
+6. **Sterling Area**: What happens to Britain's currency bloc?
+
+For each issue:
+- Players see 3 options (A, B, C)
+- Options favor some countries and oppose others
+- Players vote support or oppose
+- Winning option (most support votes) determines scoring
+- Favored countries get +10 points
+- Opposed countries lose -5 points
+
+### Phase 2: Economic Management (Future Enhancement)
+
+Currently displays final results. Future versions may include:
+- Post-war economic simulation
+- Policy implementation
+- Crisis management
+- Additional scoring based on economic performance
+
+## Database Structure
+
+### Key Tables
+
+- `users`: Student and teacher accounts
+- `countries`: The 5 Bretton Woods powers with economic data
+- `issues`: The 6 conference topics
+- `issue_options`: 3 voting choices per issue
+- `games`: Individual game sessions
+- `players`: Links users to countries in specific games
+- `votes`: Individual player votes
+- `game_results`: Final scores and statistics
+
+### Stored Procedures
+
+- `sp_create_game`: Creates new game with unique code
+- `sp_join_game`: Adds player to game with validation
+- `sp_calculate_round_scores`: Awards points based on vote results
+
+## API Endpoints
+
+### Authentication
+- `POST /api/auth/register` - Create new account
+- `POST /api/auth/login` - Login
+- `POST /api/auth/logout` - Logout
+- `GET /api/auth/session` - Check current session
+
+### Game Management
+- `POST /api/games/create` - Create new game
+- `POST /api/games/join` - Join existing game
+- `GET /api/games/:gameCode/lobby` - Get lobby info
+- `POST /api/games/:gameCode/ready` - Mark player ready
+- `POST /api/games/:gameCode/start` - Start game
+- `GET /api/games/:gameCode/state` - Get current game state
+- `POST /api/games/:gameCode/vote` - Submit vote
+- `POST /api/games/:gameCode/next-round` - Advance to next round
+- `GET /api/games/:gameCode/results` - Get final results
+- `POST /api/games/:gameCode/reset` - Reset game
+
+### Utilities
+- `GET /api/countries` - Get all countries
+- `GET /api/issues` - Get all issues
+- `GET /api/health` - Health check
+
+## Troubleshooting
+
+### Common Issues
+
+**"Cannot connect to database"**
+- Verify database credentials in `server.js`
+- Check that MySQL server is running
+- Confirm database exists and schema is imported
+- Test connection: `mysql -h HOST -u USER -p DATABASE`
+
+**"Game not found"**
+- Check that game code is correct (case-sensitive)
+- Verify game wasn't deleted
+- Try creating a new game
+
+**"Not all players are ready"**
+- Each player must click "Mark Ready" before host can start
+- Check lobby to see who hasn't marked ready
+
+**"Failed to submit vote"**
+- Ensure you're still connected to the server
+- Check that it's your turn to vote
+- Verify game hasn't ended
+
+**CORS errors**
+- Make sure backend server is running
+- Check that `API_BASE_URL` in frontend matches server address
+- Verify CORS is enabled in `server.js`
+
+### Database Issues
+
+**Reset a stuck game:**
+```sql
+UPDATE games SET game_status = 'lobby', current_round = 0 WHERE game_code = 'ABC123';
+DELETE FROM votes WHERE game_issue_id IN (SELECT game_issue_id FROM game_issues WHERE game_id = X);
 ```
 
-## 📊 Monitoring
-
-### Server Console Shows:
-- Player connections/disconnections
-- Country selections
-- Votes cast
-- Round advances
-- Game resets
-
-### Example Output:
-```
-Client connected: abc123
-Player player_xyz joined as USA
-Player player_xyz voted for option a on issue 1
-All players ready, advancing to round 2
-Game reset
+**View active games:**
+```sql
+SELECT * FROM vw_game_lobby WHERE game_status != 'completed';
 ```
 
-## 🎓 Educational Benefits
-
-### vs. localStorage version:
-| Feature | localStorage | Server |
-|---------|-------------|--------|
-| True multiplayer | ❌ Same computer only | ✅ Different computers |
-| State reliability | ❌ Browser dependent | ✅ Server storage |
-| Real-time sync | ⚠️ Polling (1s delay) | ✅ WebSocket (instant) |
-| Disconnect handling | ❌ State lost | ✅ Graceful |
-| Monitoring | ❌ None | ✅ Server logs |
-
-### Teaching Opportunities:
-- Demonstrate client-server architecture
-- Show real-time communication (WebSockets)
-- Discuss network protocols
-- Explain state management
-- Introduce backend development
-
-## 🔐 Security Notes
-
-### For Classroom Use:
-- ✅ Local network only (safe)
-- ✅ No sensitive data transmitted
-- ✅ No user authentication (game only)
-
-### For Public Deployment:
-- Add HTTPS (use Let's Encrypt)
-- Add authentication
-- Add rate limiting
-- Use environment variables for config
-- Deploy to cloud (Heroku, Railway, etc.)
-
-## 📦 Deployment
-
-### Deploy to Cloud (Optional):
-
-**Heroku:**
-```bash
-# Install Heroku CLI
-heroku create bretton-woods-game
-git push heroku main
+**See player standings:**
+```sql
+SELECT * FROM vw_player_standings WHERE game_id = X;
 ```
 
-**Railway:**
-1. Connect GitHub repo
-2. Deploy automatically
-3. Get public URL
+## Security Notes
 
-**Render:**
-1. New Web Service
-2. Connect repo
-3. Build: `npm install`
-4. Start: `npm start`
+**Before deploying to production:**
 
-## 🛠️ Customization
+1. **Change database password** (currently exposed in code)
+2. **Use environment variables** for sensitive data
+3. **Enable HTTPS** for secure connections
+4. **Implement rate limiting** to prevent abuse
+5. **Add CSRF protection**
+6. **Validate all user inputs** server-side
+7. **Use strong session secrets**
+8. **Set secure cookie options**
 
-### Add More Countries:
-Edit `game-data.json`:
-```json
-"Brazil": {
-  "name": "Brazil",
-  "color": "bg-teal-600",
-  ...
-}
+Example .env file:
+```
+DB_HOST=your_host
+DB_USER=your_user
+DB_PASSWORD=your_password
+DB_NAME=your_database
+SESSION_SECRET=your_random_secret_key
+PORT=3000
 ```
 
-### Add More Issues:
-Edit `game-data.json` → `issues` array
+## Educational Value
 
-### Change Scoring:
-Edit `server.js` → `calculateScoresAndAdvance()` function
+### Learning Objectives
 
-### Modify UI:
-Edit `index.html` and `styles.css`
+Students will:
+- Understand competing national interests at Bretton Woods
+- Learn about post-WWII economic institutions (IMF, World Bank)
+- Practice negotiation and strategic decision-making
+- Experience how international agreements form through compromise
+- Analyze historical economic policies and their effects
 
-## 📚 Technical Stack
+### Discussion Questions
 
-- **Backend:** Node.js + Express + Socket.io
-- **Frontend:** React + Babel (in-browser JSX)
-- **Storage:** JSON file (file system)
-- **Communication:** WebSocket
-- **Styling:** CSS3
+- Why did the US dominate the real conference?
+- How did countries' economic positions influence their objectives?
+- What trade-offs did nations face between sovereignty and stability?
+- How do the Bretton Woods institutions affect the world today?
+- What would have happened if different options had won?
 
-## 🎯 Comparison with Browser Version
+### Extensions
 
-| Aspect | Browser (localStorage) | Server Version |
-|--------|----------------------|----------------|
-| Setup | Easy (just open HTML) | Moderate (install Node) |
-| Multiplayer | Same computer/network | Any computer |
-| Reliability | Medium | High |
-| State persistence | Browser only | Server file |
-| Real-time | Polling | WebSocket |
-| Best for | Quick demo, testing | Actual classroom use |
+- Research your nation's actual position at Bretton Woods
+- Compare simulation outcomes to historical results
+- Debate: Was the Bretton Woods system fair?
+- Analyze: How did the system eventually collapse (1971)?
+- Connect: How does this relate to modern economic issues?
 
-## 💡 Pro Tips
+## Credits
 
-1. **Test first**: Run server on your computer, open multiple browser tabs
-2. **Share screen**: Project teacher view on screen during game
-3. **Backup state**: Copy `game-state.json` to save interesting games
-4. **Monitor console**: Watch server terminal for player activity
-5. **Use dev mode**: `npm run dev` for development/customization
+Based on the historical Bretton Woods Conference of July 1944.
 
-## 📞 Support
+Educational simulation designed for college-level courses in:
+- Economic History
+- International Relations
+- Political Economy
+- American History
+- World History
 
-Having issues? Check:
-1. Node.js version: `node --version` (should be 14+)
-2. Server running: Check terminal for errors
-3. Network: All devices on same WiFi
-4. Firewall: Allow Node.js through firewall
-5. Browser: Use Chrome, Firefox, or Edge (not IE)
+## License
 
-## 🎉 You're Ready!
+MIT License - Feel free to use and modify for educational purposes.
 
-Start the server and enjoy true multiplayer Bretton Woods simulation!
+## Support
 
-```bash
-npm start
-```
+For questions or issues:
+1. Check this README
+2. Review the code comments
+3. Check database schema documentation
+4. Test with sample data provided
 
-Happy negotiating! 🌍💼
+## Version History
+
+**v2.0 (Current)** - Database-backed version
+- MySQL database for persistent state
+- User authentication system
+- Real-time game updates
+- Multi-game support
+- Session management
+
+**v1.0** - Original React-only version
+- Single-game simulation
+- Local state management
+- No persistence
+
+## Future Enhancements
+
+- [ ] Phase 2: Economic management gameplay
+- [ ] Teacher dashboard to monitor all games
+- [ ] Detailed analytics and reports
+- [ ] Historical accuracy mode with actual outcomes
+- [ ] Chat/negotiation features
+- [ ] Mobile app version
+- [ ] Additional historical scenarios
+- [ ] AI opponents for solo practice

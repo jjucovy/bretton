@@ -1,1134 +1,732 @@
-// server.js - Bretton Woods Multiplayer Server
+// Bretton Woods Conference Simulation - Backend Server
+// Connects to MySQL database and provides REST API
+
 const express = require('express');
-const http = require('http');
-const socketIo = require('socket.io');
-const path = require('path');
-const fs = require('fs');
-const crypto = require('crypto');
+const mysql = require('mysql2/promise');
+const cors = require('cors');
+const bcrypt = require('bcrypt');
+const session = require('express-session');
+const MySQLStore = require('express-mysql-session')(session);
 
 const app = express();
-const server = http.createServer(app);
-const io = socketIo(server);
+const PORT = process.env.PORT || 3000;
 
-const PORT = process.env.PORT || 65002;
-const STATE_FILE = path.join(__dirname, 'game-state.json');
+// Middleware
+app.use(cors({
+    origin: true,
+    credentials: true
+}));
+app.use(express.json());
 
-// Serve static files
-app.use(express.static(__dirname));
+// Database connection pool
+const pool = mysql.createPool({
+    host: '86.38.202.154',
+    user: 'u585377912_keynes',
+    password: 'qKb&J8Wu#%',
+    database: 'u585377912_bretton',
+    waitForConnections: true,
+    connectionLimit: 10,
+    queueLimit: 0
+});
 
-// Game state stored on server
-let gameState = {
-  gameId: Date.now(),
-  gameStarted: false,
-  currentRound: 0,
-  players: {},
-  votes: {},
-  readyPlayers: [],
-  gamePhase: 'lobby', // lobby, voting, results, phase2, complete
-  scores: { USA: 0, UK: 0, USSR: 0, France: 0, China: 0, India: 0, Argentina: 0 },
-  roundHistory: [],
-  // User authentication
-  users: {}, // username -> { password: hashedPassword, playerId: string, createdAt: timestamp }
-  // Military deployments by country
-  militaryDeployments: {
-    USA: {
-      bases: [
-        { name: "Continental US", lat: 39, lng: -98, troops: 8000000, type: "homeland" },
-        { name: "Pearl Harbor", lat: 21.3, lng: -157.8, troops: 50000, type: "naval" },
-        { name: "Philippines", lat: 14.6, lng: 121, troops: 30000, type: "occupied" },
-        { name: "Germany (Occupation)", lat: 50, lng: 10, troops: 250000, type: "occupation" },
-        { name: "Japan (Occupation)", lat: 36, lng: 138, troops: 350000, type: "occupation" }
-      ],
-      totalTroops: 12000000,
-      militaryBudget: 90000 // Million USD
-    },
-    UK: {
-      bases: [
-        { name: "British Isles", lat: 54, lng: -2, troops: 3000000, type: "homeland" },
-        { name: "India (Colonial)", lat: 20, lng: 77, troops: 200000, type: "colonial" },
-        { name: "Egypt (Suez)", lat: 30, lng: 31, troops: 80000, type: "base" },
-        { name: "Singapore", lat: 1.3, lng: 103.8, troops: 40000, type: "base" },
-        { name: "Germany (Occupation)", lat: 51, lng: 9, troops: 120000, type: "occupation" }
-      ],
-      totalTroops: 5000000,
-      militaryBudget: 15000
-    },
-    USSR: {
-      bases: [
-        { name: "Soviet Union", lat: 60, lng: 100, troops: 12000000, type: "homeland" },
-        { name: "Eastern Europe", lat: 52, lng: 20, troops: 2000000, type: "occupation" },
-        { name: "Manchuria", lat: 45, lng: 125, troops: 500000, type: "forward" }
-      ],
-      totalTroops: 11000000,
-      militaryBudget: 25000
-    },
-    France: {
-      bases: [
-        { name: "France", lat: 46, lng: 2, troops: 800000, type: "homeland" },
-        { name: "Algeria (Colonial)", lat: 28, lng: 3, troops: 100000, type: "colonial" },
-        { name: "Indochina (Colonial)", lat: 16, lng: 106, troops: 50000, type: "colonial" }
-      ],
-      totalTroops: 1200000,
-      militaryBudget: 5000
-    },
-    China: {
-      bases: [
-        { name: "Nationalist China", lat: 35, lng: 105, troops: 3000000, type: "homeland" },
-        { name: "Communist Base Areas", lat: 38, lng: 109, troops: 1000000, type: "insurgent" }
-      ],
-      totalTroops: 4300000,
-      militaryBudget: 1500
-    },
-    India: {
-      bases: [
-        { name: "British India", lat: 20, lng: 77, troops: 2000000, type: "colonial_native" }
-      ],
-      totalTroops: 2000000,
-      militaryBudget: 800
-    },
-    Argentina: {
-      bases: [
-        { name: "Argentina", lat: -34, lng: -64, troops: 120000, type: "homeland" }
-      ],
-      totalTroops: 120000,
-      militaryBudget: 300
+// Session store
+const sessionStore = new MySQLStore({
+    clearExpired: true,
+    checkExpirationInterval: 900000,
+    expiration: 86400000
+}, pool);
+
+// Session middleware
+app.use(session({
+    key: 'bretton_session',
+    secret: 'bretton-woods-secret-key-change-in-production',
+    store: sessionStore,
+    resave: false,
+    saveUninitialized: false,
+    cookie: {
+        maxAge: 86400000, // 24 hours
+        httpOnly: true,
+        secure: false // Set to true if using HTTPS
     }
-  },
-  // Phase 2: Post-war economic management (1946-1952)
-  phase2: {
-    active: false,
-    currentYear: 1946,
-    maxYears: 7,
-    yearlyData: {}, // year -> country -> economic data
-    policies: {}, // country -> { centralBankRate, exchangeRate, tariffRate }
-    achievements: {}, // country -> achievements earned
-    yearScores: {} // year -> country -> score breakdown
-  }
-};
+}));
 
-// Load game state from file if it exists
-function loadGameState() {
-  try {
-    if (fs.existsSync(STATE_FILE)) {
-      const data = fs.readFileSync(STATE_FILE, 'utf8');
-      const loadedState = JSON.parse(data);
-      
-      // Merge loaded state with defaults (preserves new features)
-      gameState = {
-        ...gameState, // Default structure with military deployments
-        ...loadedState, // Loaded data
-        // Ensure critical nested objects exist
-        users: loadedState.users || {},
-        players: loadedState.players || {},
-        votes: loadedState.votes || {},
-        scores: { ...gameState.scores, ...(loadedState.scores || {}) },
-        phase2: {
-          ...gameState.phase2,
-          ...(loadedState.phase2 || {})
-        },
-        militaryDeployments: {
-          ...gameState.militaryDeployments,
-          ...(loadedState.militaryDeployments || {})
-        }
-      };
-      
-      console.log('✅ Game state loaded from file');
-      console.log(`   - Users: ${Object.keys(gameState.users).length}`);
-      console.log(`   - Players in game: ${Object.keys(gameState.players).length}`);
-      console.log(`   - Game phase: ${gameState.gamePhase}`);
-    } else {
-      console.log('📝 No saved state found, using defaults');
-    }
-  } catch (err) {
-    console.error('❌ Error loading game state:', err);
-    console.log('⚠️  Using default game state');
-  }
-}
+// ============================================================
+// AUTHENTICATION ROUTES
+// ============================================================
 
-// Save game state to file
-function saveGameState() {
-  try {
-    // Create backup before saving
-    if (fs.existsSync(STATE_FILE)) {
-      const backupFile = STATE_FILE.replace('.json', '-backup.json');
-      fs.copyFileSync(STATE_FILE, backupFile);
-    }
+// Register new user
+app.post('/api/auth/register', async (req, res) => {
+    const { username, email, password, displayName, isTeacher } = req.body;
     
-    fs.writeFileSync(STATE_FILE, JSON.stringify(gameState, null, 2));
-    console.log('💾 Game state saved to file');
-  } catch (err) {
-    console.error('❌ Error saving game state:', err);
-  }
-}
-
-// Load state on startup
-loadGameState();
-
-// Auto-save every 2 minutes
-const AUTO_SAVE_INTERVAL = 2 * 60 * 1000; // 2 minutes
-setInterval(() => {
-  saveGameState();
-  console.log('🔄 Auto-save completed');
-}, AUTO_SAVE_INTERVAL);
-
-// Save on server shutdown
-process.on('SIGINT', () => {
-  console.log('\n⚠️  Server shutting down...');
-  saveGameState();
-  console.log('✅ Final save completed');
-  process.exit(0);
-});
-
-process.on('SIGTERM', () => {
-  console.log('\n⚠️  Server terminating...');
-  saveGameState();
-  console.log('✅ Final save completed');
-  process.exit(0);
-});
-
-// Password hashing functions
-function hashPassword(password) {
-  return crypto.createHash('sha256').update(password).digest('hex');
-}
-
-function verifyPassword(password, hashedPassword) {
-  return hashPassword(password) === hashedPassword;
-}
-
-// Broadcast state to all connected clients
-function broadcastState() {
-  io.emit('stateUpdate', gameState);
-  saveGameState();
-}
-
-// Socket.io connection handling
-io.on('connection', (socket) => {
-  console.log(`Client connected: ${socket.id}`);
-  
-  // Send current state to newly connected client
-  socket.emit('stateUpdate', gameState);
-  
-  // Register new user
-  socket.on('register', ({ username, password }) => {
     if (!username || !password) {
-      socket.emit('registerResult', { success: false, message: 'Username and password required' });
-      return;
+        return res.status(400).json({ error: 'Username and password required' });
     }
     
-    if (username.length < 3) {
-      socket.emit('registerResult', { success: false, message: 'Username must be at least 3 characters' });
-      return;
-    }
-    
-    if (password.length < 4) {
-      socket.emit('registerResult', { success: false, message: 'Password must be at least 4 characters' });
-      return;
-    }
-    
-    if (gameState.users[username]) {
-      socket.emit('registerResult', { success: false, message: 'Username already taken' });
-      return;
-    }
-    
-    const playerId = `player_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-    gameState.users[username] = {
-      password: hashPassword(password),
-      playerId: playerId,
-      createdAt: Date.now()
-    };
-    
-    broadcastState();
-    socket.emit('registerResult', { success: true, playerId: playerId, username: username });
-    console.log(`New user registered: ${username}`);
-  });
-  
-  // Login existing user
-  socket.on('login', ({ username, password }) => {
-    if (!username || !password) {
-      socket.emit('loginResult', { success: false, message: 'Username and password required' });
-      return;
-    }
-    
-    const user = gameState.users[username];
-    if (!user) {
-      socket.emit('loginResult', { success: false, message: 'Invalid username or password' });
-      return;
-    }
-    
-    if (!verifyPassword(password, user.password)) {
-      socket.emit('loginResult', { success: false, message: 'Invalid username or password' });
-      return;
-    }
-    
-    // Check if player was previously in game
-    const playerId = user.playerId;
-    const existingPlayer = gameState.players[playerId];
-    let resumeData = null;
-    
-    if (existingPlayer) {
-      // Player is resuming - update socket ID and mark as reconnected
-      existingPlayer.socketId = socket.id;
-      existingPlayer.lastLogin = Date.now();
-      existingPlayer.disconnected = false; // Mark as reconnected
-      delete existingPlayer.disconnectedAt;
-      
-      resumeData = {
-        country: existingPlayer.country,
-        gamePhase: gameState.gamePhase,
-        currentRound: gameState.currentRound,
-        currentYear: gameState.phase2.currentYear,
-        isResuming: true
-      };
-      console.log(`User ${username} reconnected as ${existingPlayer.country}`);
-    }
-    
-    socket.emit('loginResult', { 
-      success: true, 
-      playerId: user.playerId, 
-      username: username,
-      resumeData: resumeData
-    });
-    
-    // Broadcast updated state if resuming
-    if (resumeData) {
-      broadcastState();
-    }
-    
-    console.log(`User logged in: ${username}${resumeData ? ' (resuming)' : ''}`);
-  });
-  
-  // Check if player should be auto-resumed
-  socket.on('checkResume', ({ playerId }) => {
-    const existingPlayer = gameState.players[playerId];
-    
-    if (existingPlayer) {
-      // Player exists in game - update socket ID, mark as reconnected, and resume
-      existingPlayer.socketId = socket.id;
-      existingPlayer.lastLogin = Date.now();
-      existingPlayer.disconnected = false; // Mark as reconnected
-      delete existingPlayer.disconnectedAt;
-      
-      socket.emit('resumeCheck', {
-        shouldResume: true,
-        country: existingPlayer.country,
-        gamePhase: gameState.gamePhase,
-        currentRound: gameState.currentRound,
-        currentYear: gameState.phase2.currentYear
-      });
-      
-      console.log(`Auto-resuming player ${playerId} as ${existingPlayer.country} (was ${existingPlayer.disconnected ? 'disconnected' : 'connected'})`);
-      broadcastState();
-      saveGameState(); // Save reconnection
-    } else {
-      socket.emit('resumeCheck', { shouldResume: false });
-    }
-  });
-  
-  // Join game
-  socket.on('joinGame', ({ playerId, country }) => {
-    // Check if country is already taken
-    const taken = Object.values(gameState.players).some(p => p.country === country);
-    
-    if (taken) {
-      socket.emit('joinResult', { success: false, message: 'Country already taken' });
-    } else {
-      gameState.players[playerId] = {
-        id: playerId,
-        country: country,
-        socketId: socket.id,
-        joinedAt: Date.now()
-      };
-      socket.emit('joinResult', { success: true });
-      broadcastState();
-      console.log(`Player ${playerId} joined as ${country}`);
-    }
-  });
-  
-  // Leave game
-  socket.on('leaveGame', ({ playerId }) => {
-    delete gameState.players[playerId];
-    gameState.readyPlayers = gameState.readyPlayers.filter(id => id !== playerId);
-    broadcastState();
-    console.log(`Player ${playerId} left game`);
-  });
-  
-  // Set player ready status
-  socket.on('setReady', ({ playerId, ready }) => {
-    if (ready) {
-      if (!gameState.readyPlayers.includes(playerId)) {
-        gameState.readyPlayers.push(playerId);
-      }
-    } else {
-      gameState.readyPlayers = gameState.readyPlayers.filter(id => id !== playerId);
-    }
-    broadcastState();
-    console.log(`Player ${playerId} ready: ${ready}`);
-  });
-  
-  // Start game
-  socket.on('startGame', () => {
-    const playerCount = Object.keys(gameState.players).length;
-    const readyCount = gameState.readyPlayers.length;
-    
-    if (playerCount > 0 && readyCount === playerCount) {
-      gameState.gameStarted = true;
-      gameState.currentRound = 1;
-      gameState.gamePhase = 'voting';
-      gameState.readyPlayers = [];
-      broadcastState();
-      console.log('Game started');
-    }
-  });
-  
-  // Submit vote
-  socket.on('submitVote', ({ playerId, issueId, optionId }) => {
-    const player = gameState.players[playerId];
-    if (player) {
-      const voteKey = `${issueId}-${player.country}`;
-      gameState.votes[voteKey] = optionId;
-      broadcastState();
-      console.log(`Player ${playerId} voted for option ${optionId} on issue ${issueId}`);
-    }
-  });
-  
-  // Advance to next round
-  socket.on('nextRound', () => {
-    const playerCount = Object.keys(gameState.players).length;
-    const readyCount = gameState.readyPlayers.length;
-    
-    if (playerCount > 0 && readyCount === playerCount) {
-      const issues = require('./game-data.json').issues;
-      
-      // Calculate scores for current round first
-      calculateScoresForCurrentRound();
-      
-      // Check if Phase 1 is complete
-      if (gameState.currentRound >= issues.length) {
-        // All voting rounds complete, transition to Phase 2
-        initializePhase2();
-      } else {
-        // Continue to next voting round
-        gameState.currentRound += 1;
-        gameState.readyPlayers = [];
-        gameState.gamePhase = 'voting';
-      }
-      
-      broadcastState();
-      console.log(`Advanced to round ${gameState.currentRound} / Phase: ${gameState.gamePhase}`);
-    }
-  });
-  
-  // Reset game
-  socket.on('resetGame', () => {
-    const savedUsers = gameState.users; // Preserve user accounts
-    gameState = {
-      gameId: Date.now(),
-      gameStarted: false,
-      currentRound: 0,
-      players: {},
-      votes: {},
-      readyPlayers: [],
-      gamePhase: 'lobby',
-      scores: { USA: 0, UK: 0, USSR: 0, France: 0, China: 0, India: 0, Argentina: 0 },
-      roundHistory: [],
-      users: savedUsers, // Keep user accounts
-      phase2: {
-        active: false,
-        currentYear: 1946,
-        maxYears: 7,
-        yearlyData: {},
-        policies: {}
-      }
-    };
-    broadcastState();
-    console.log('Game reset');
-  });
-  
-  // Phase 2: Set economic policies
-  socket.on('setPhase2Policies', ({ playerId, centralBankRate, exchangeRate, tariffRate }) => {
-    const player = gameState.players[playerId];
-    if (player && gameState.phase2.active) {
-      if (!gameState.phase2.policies[gameState.phase2.currentYear]) {
-        gameState.phase2.policies[gameState.phase2.currentYear] = {};
-      }
-      gameState.phase2.policies[gameState.phase2.currentYear][player.country] = {
-        centralBankRate: parseFloat(centralBankRate),
-        exchangeRate: parseFloat(exchangeRate),
-        tariffRate: parseFloat(tariffRate),
-        submittedAt: Date.now()
-      };
-      broadcastState();
-      console.log(`Player ${playerId} (${player.country}) set policies for ${gameState.phase2.currentYear}`);
-    }
-  });
-
-  // Phase 2: Advance year
-  socket.on('advanceYear', () => {
-    const playerCount = Object.keys(gameState.players).length;
-    const readyCount = gameState.readyPlayers.length;
-    
-    if (playerCount > 0 && readyCount === playerCount && gameState.phase2.active) {
-      calculateYearEconomics();
-      
-      if (gameState.phase2.currentYear - 1946 < gameState.phase2.maxYears) {
-        gameState.phase2.currentYear++;
-        gameState.readyPlayers = [];
-      } else {
-        // End of Phase 2 - Calculate achievements and bonuses
-        calculateFinalAchievements();
-        gameState.gamePhase = 'complete';
-      }
-      
-      broadcastState();
-      console.log(`Advanced to year ${gameState.phase2.currentYear}`);
-    }
-  });
-  
-  // Disconnect
-  socket.on('disconnect', () => {
-    // Find player by socket ID
-    const playerId = Object.keys(gameState.players).find(
-      id => gameState.players[id].socketId === socket.id
-    );
-    
-    if (playerId) {
-      // Mark as disconnected but keep in game
-      gameState.players[playerId].disconnected = true;
-      gameState.players[playerId].disconnectedAt = Date.now();
-      
-      // Remove from ready list
-      gameState.readyPlayers = gameState.readyPlayers.filter(id => id !== playerId);
-      
-      broadcastState();
-      saveGameState(); // Save to preserve state
-      
-      console.log(`Player ${playerId} (${gameState.players[playerId].country}) disconnected - keeping in game`);
-    }
-    
-    console.log(`Client disconnected: ${socket.id}`);
-  });
-});
-
-// Initialize Phase 2: Post-war economic management
-function initializePhase2() {
-  const initialEconomicData = require('./game-data.json').economicData;
-  
-  gameState.phase2.active = true;
-  gameState.phase2.currentYear = 1946;
-  gameState.gamePhase = 'phase2';
-  gameState.readyPlayers = [];
-  
-  // Initialize starting economic conditions for each country
-  gameState.phase2.yearlyData[1946] = {};
-  Object.keys(gameState.players).forEach(playerId => {
-    const player = gameState.players[playerId];
-    const country = player.country;
-    const initialData = initialEconomicData[country];
-    
-    gameState.phase2.yearlyData[1946][country] = {
-      gdpGrowth: 0,
-      goldReserves: initialData.goldReserves,
-      unemployment: country === 'USA' ? 3.9 : 
-                    country === 'UK' ? 2.5 : 
-                    country === 'USSR' ? 0 : 
-                    country === 'France' ? 4.5 : 
-                    country === 'India' ? 8.0 :
-                    country === 'Argentina' ? 5.5 : 5.0,
-      tradeBalance: initialData.tradeBalance,
-      inflation: country === 'USA' ? 8.3 : 
-                 country === 'UK' ? 3.1 : 
-                 country === 'USSR' ? 0 : 
-                 country === 'France' ? 50.0 : 
-                 country === 'India' ? 12.0 :
-                 country === 'Argentina' ? 4.0 : 20.0,
-      industrialOutput: initialData.industrialOutput
-    };
-  });
-  
-  console.log('Phase 2 initialized: Post-war economic management begins (1946-1952)');
-}
-
-// Calculate economic outcomes for the year based on policies
-function calculateYearEconomics() {
-  const currentYear = gameState.phase2.currentYear;
-  const policies = gameState.phase2.policies[currentYear] || {};
-  const prevYearData = gameState.phase2.yearlyData[currentYear];
-  
-  if (!prevYearData) return;
-  
-  // Initialize next year's data
-  const nextYear = currentYear + 1;
-  gameState.phase2.yearlyData[nextYear] = {};
-  
-  // Get Bretton Woods agreements impact
-  const agreementBonus = calculateAgreementBonus();
-  
-  Object.keys(gameState.players).forEach(playerId => {
-    const player = gameState.players[playerId];
-    const country = player.country;
-    const policy = policies[country];
-    const prevData = prevYearData[country];
-    
-    if (!policy || !prevData) {
-      // If no policy submitted, use defaults
-      gameState.phase2.yearlyData[nextYear][country] = {
-        ...prevData,
-        gdpGrowth: -2.0 // Penalty for not submitting policy
-      };
-      return;
-    }
-    
-    // Economic calculation model
-    const { centralBankRate, exchangeRate, tariffRate } = policy;
-    
-    // Base growth rate (post-war boom)
-    let gdpGrowth = 4.0;
-    
-    // Central bank rate impact (lower rates = more growth, but more inflation)
-    const optimalCBRate = 3.0;
-    const cbRateDeviation = Math.abs(centralBankRate - optimalCBRate);
-    gdpGrowth -= cbRateDeviation * 0.5;
-    
-    // Exchange rate impact (competitive = more exports)
-    // Higher exchange rate = stronger currency = fewer exports
-    const exchangeRateImpact = (exchangeRate - 1.0) * -2.0;
-    gdpGrowth += exchangeRateImpact;
-    
-    // Tariff impact (protection vs trade)
-    const optimalTariff = country === 'USA' ? 10 : 15;
-    const tariffDeviation = Math.abs(tariffRate - optimalTariff);
-    gdpGrowth -= tariffDeviation * 0.1;
-    
-    // Bretton Woods agreement bonus
-    gdpGrowth += agreementBonus[country] || 0;
-    
-    // China Civil War penalties (1946-1949)
-    let civilWarPenalty = {
-      gdp: 0,
-      inflation: 0,
-      trade: 0
-    };
-    if (country === 'China' && currentYear >= 1946 && currentYear <= 1949) {
-      civilWarPenalty.gdp = -2.0;     // GDP growth penalty
-      civilWarPenalty.inflation = 10;  // Hyperinflation
-      civilWarPenalty.trade = -500;    // Trade disruption
-    }
-    
-    // India Independence transition (colonial → independent)
-    let indiaTransition = {
-      gdp: 0,
-      inflation: 0,
-      trade: 0
-    };
-    if (country === 'India') {
-      if (currentYear === 1947) {
-        // 1947: Partition year - severe disruption
-        indiaTransition.gdp = -1.5;      // Partition violence, displacement
-        indiaTransition.inflation = 8;    // Economic chaos
-        indiaTransition.trade = -300;     // Border disruption with Pakistan
-      } else if (currentYear === 1948) {
-        // 1948: Post-independence recovery begins
-        indiaTransition.gdp = -0.5;      // Still recovering
-        indiaTransition.inflation = 3;    // Stabilizing
-        indiaTransition.trade = -100;     // Trade routes adjusting
-      }
-      // 1949+: Full independence, no penalties (but also no colonial advantages)
-    }
-    
-    // Apply penalties
-    gdpGrowth += civilWarPenalty.gdp;
-    gdpGrowth += indiaTransition.gdp;
-    
-    // Random shock (-1 to +1)
-    const randomShock = (Math.random() - 0.5) * 2;
-    gdpGrowth += randomShock;
-    
-    // Calculate inflation
-    let inflation = prevData.inflation;
-    // Lower CB rates = higher inflation
-    if (centralBankRate < 2.0) {
-      inflation += (2.0 - centralBankRate) * 2.0;
-    } else if (centralBankRate > 5.0) {
-      inflation -= (centralBankRate - 5.0) * 1.5;
-    }
-    inflation = Math.max(0, inflation + (Math.random() - 0.5) * 3);
-    
-    // Apply China civil war hyperinflation
-    inflation += civilWarPenalty.inflation;
-    
-    // Apply India independence transition inflation
-    inflation += indiaTransition.inflation;
-    
-    // Calculate unemployment (inverse of growth)
-    let unemployment = prevData.unemployment;
-    if (gdpGrowth > 3.0) {
-      unemployment -= (gdpGrowth - 3.0) * 0.3;
-    } else if (gdpGrowth < 1.0) {
-      unemployment += (1.0 - gdpGrowth) * 0.5;
-    }
-    unemployment = Math.max(0.5, Math.min(25, unemployment));
-    
-    // Calculate trade balance
-    let tradeBalance = prevData.tradeBalance;
-    // Lower exchange rate = more competitive = better trade balance
-    const exchangeEffect = (1.0 - exchangeRate) * 500;
-    // Higher tariffs = less imports but also retaliation
-    const tariffEffect = tariffRate * -20;
-    // GDP growth increases imports
-    const growthEffect = gdpGrowth * -100;
-    
-    tradeBalance += exchangeEffect + tariffEffect + growthEffect + (Math.random() - 0.5) * 200;
-    
-    // Apply China civil war trade disruption
-    tradeBalance += civilWarPenalty.trade;
-    
-    // Apply India independence transition trade disruption
-    tradeBalance += indiaTransition.trade;
-    
-    // Calculate gold reserves
-    let goldReserves = prevData.goldReserves;
-    // Trade surplus = gold inflow, deficit = outflow
-    if (tradeBalance > 0) {
-      goldReserves += tradeBalance * 0.1;
-    } else {
-      goldReserves += tradeBalance * 0.15; // Faster outflow than inflow
-    }
-    goldReserves = Math.max(0, goldReserves);
-    
-    // Update industrial output
-    let industrialOutput = prevData.industrialOutput;
-    const prevIndustrialOutput = prevData.industrialOutput;
-    industrialOutput += gdpGrowth * 0.5;
-    industrialOutput = Math.max(0, industrialOutput);
-    const outputGrowth = industrialOutput - prevIndustrialOutput;
-    
-    // Calculate gold change
-    const goldChange = goldReserves - prevData.goldReserves;
-    
-    // Store results
-    gameState.phase2.yearlyData[nextYear][country] = {
-      gdpGrowth: Math.round(gdpGrowth * 10) / 10,
-      goldReserves: Math.round(goldReserves),
-      unemployment: Math.round(unemployment * 10) / 10,
-      tradeBalance: Math.round(tradeBalance),
-      inflation: Math.round(inflation * 10) / 10,
-      industrialOutput: Math.round(industrialOutput * 10) / 10
-    };
-    
-    // Update country score based on performance
-    const performanceResult = calculatePerformanceScore(
-      gdpGrowth, 
-      unemployment, 
-      inflation, 
-      tradeBalance,
-      goldChange,
-      outputGrowth
-    );
-    
-    // Store year score and breakdown for later display
-    if (!gameState.phase2.yearScores) gameState.phase2.yearScores = {};
-    if (!gameState.phase2.yearScores[nextYear]) gameState.phase2.yearScores[nextYear] = {};
-    gameState.phase2.yearScores[nextYear][country] = {
-      total: performanceResult.score,
-      breakdown: performanceResult.breakdown
-    };
-    
-    gameState.scores[country] += performanceResult.score;
-  });
-}
-
-// Calculate bonus from Bretton Woods agreements
-function calculateAgreementBonus() {
-  const bonus = {};
-  const countries = ['USA', 'UK', 'USSR', 'France', 'China', 'India', 'Argentina'];
-  
-  // Countries that got favorable agreements get economic boost
-  countries.forEach(country => {
-    const countryScore = gameState.scores[country] || 0;
-    // Higher Phase 1 score = better agreements = economic boost
-    bonus[country] = Math.max(0, countryScore / 20);
-  });
-  
-  return bonus;
-}
-
-// Calculate performance score for the year (enhanced system)
-function calculatePerformanceScore(gdpGrowth, unemployment, inflation, tradeBalance, goldChange, outputGrowth) {
-  let score = 0;
-  let breakdown = {};
-  
-  // GDP Growth (0-15 points) - Sweet spot: 5-7%
-  if (gdpGrowth >= 5 && gdpGrowth <= 7) {
-    score += 15;
-    breakdown.gdp = 15;
-  } else if (gdpGrowth >= 3 && gdpGrowth < 5) {
-    score += 12;
-    breakdown.gdp = 12;
-  } else if (gdpGrowth > 7) {
-    score += 8;
-    breakdown.gdp = 8;
-  } else if (gdpGrowth >= 1 && gdpGrowth < 3) {
-    score += 6;
-    breakdown.gdp = 6;
-  } else if (gdpGrowth >= 0 && gdpGrowth < 1) {
-    score += 2;
-    breakdown.gdp = 2;
-  } else {
-    score -= 5;
-    breakdown.gdp = -5;
-  }
-  
-  // Unemployment (0-15 points) - Target: 2-4%
-  if (unemployment >= 2 && unemployment <= 4) {
-    score += 15;
-    breakdown.unemployment = 15;
-  } else if (unemployment < 2) {
-    score += 10;
-    breakdown.unemployment = 10;
-  } else if (unemployment > 4 && unemployment <= 6) {
-    score += 12;
-    breakdown.unemployment = 12;
-  } else if (unemployment > 6 && unemployment <= 8) {
-    score += 6;
-    breakdown.unemployment = 6;
-  } else if (unemployment > 8 && unemployment <= 10) {
-    score += 2;
-    breakdown.unemployment = 2;
-  } else {
-    score -= 3;
-    breakdown.unemployment = -3;
-  }
-  
-  // Inflation (0-12 points) - Goldilocks: 1-3%
-  if (inflation >= 1 && inflation <= 3) {
-    score += 12;
-    breakdown.inflation = 12;
-  } else if (inflation > 3 && inflation <= 5) {
-    score += 10;
-    breakdown.inflation = 10;
-  } else if (inflation > 0 && inflation < 1) {
-    score += 5;
-    breakdown.inflation = 5;
-  } else if (inflation > 5 && inflation <= 7) {
-    score += 4;
-    breakdown.inflation = 4;
-  } else if (inflation > 7 && inflation <= 10) {
-    score += 0;
-    breakdown.inflation = 0;
-  } else if (inflation > 10) {
-    score -= 8;
-    breakdown.inflation = -8;
-  } else {
-    score -= 5;
-    breakdown.inflation = -5;
-  }
-  
-  // Trade Balance (0-10 points)
-  if (tradeBalance > 2000) {
-    score += 10;
-    breakdown.trade = 10;
-  } else if (tradeBalance > 1000) {
-    score += 8;
-    breakdown.trade = 8;
-  } else if (tradeBalance > 0) {
-    score += 6;
-    breakdown.trade = 6;
-  } else if (tradeBalance > -500) {
-    score += 4;
-    breakdown.trade = 4;
-  } else if (tradeBalance > -1500) {
-    score += 2;
-    breakdown.trade = 2;
-  } else {
-    score += 0;
-    breakdown.trade = 0;
-  }
-  
-  // Gold Reserves Change (0-5 points)
-  if (goldChange > 1000) {
-    score += 5;
-    breakdown.gold = 5;
-  } else if (goldChange > 500) {
-    score += 3;
-    breakdown.gold = 3;
-  } else if (goldChange > 0) {
-    score += 1;
-    breakdown.gold = 1;
-  } else if (goldChange > -500) {
-    score += 0;
-    breakdown.gold = 0;
-  } else {
-    score -= 2;
-    breakdown.gold = -2;
-  }
-  
-  // Industrial Output Growth (0-3 points)
-  if (outputGrowth >= 10) {
-    score += 3;
-    breakdown.output = 3;
-  } else if (outputGrowth >= 5) {
-    score += 2;
-    breakdown.output = 2;
-  } else if (outputGrowth >= 2) {
-    score += 1;
-    breakdown.output = 1;
-  } else if (outputGrowth >= 0) {
-    score += 0;
-    breakdown.output = 0;
-  } else {
-    score -= 1;
-    breakdown.output = -1;
-  }
-  
-  return { score, breakdown };
-}
-
-// Calculate final achievements and bonuses at end of Phase 2
-function calculateFinalAchievements() {
-  if (!gameState.phase2.achievements) {
-    gameState.phase2.achievements = {};
-  }
-  
-  const countries = Object.keys(gameState.players).map(pid => gameState.players[pid].country);
-  
-  countries.forEach(country => {
-    const achievements = [];
-    let bonusPoints = 0;
-    
-    // Get all years data for this country
-    const years = [];
-    for (let year = 1946; year <= 1952; year++) {
-      if (gameState.phase2.yearlyData[year] && gameState.phase2.yearlyData[year][country]) {
-        years.push(gameState.phase2.yearlyData[year][country]);
-      }
-    }
-    
-    if (years.length === 0) return;
-    
-    // Calculate averages
-    const avgGDP = years.reduce((sum, y) => sum + y.gdpGrowth, 0) / years.length;
-    const avgUnemployment = years.reduce((sum, y) => sum + y.unemployment, 0) / years.length;
-    const avgInflation = years.reduce((sum, y) => sum + y.inflation, 0) / years.length;
-    
-    // Achievement: Golden Age (100 points)
-    if (avgGDP > 5 && avgUnemployment < 4 && avgInflation >= 1 && avgInflation <= 4 && 
-        years.every(y => y.gdpGrowth > 0)) {
-      achievements.push({ name: 'Golden Age', description: 'Exceptional economic performance', points: 100 });
-      bonusPoints += 100;
-    }
-    
-    // Achievement: Stable Prosperity (60 points)
-    else if (years.every(y => y.gdpGrowth > 0) && 
-             years.every(y => y.inflation <= 8) &&
-             years.every(y => y.unemployment <= 10)) {
-      achievements.push({ name: 'Stable Prosperity', description: 'Maintained stability all years', points: 60 });
-      bonusPoints += 60;
-    }
-    
-    // Achievement: Trade Champion (40 points)
-    const allPositiveTrade = years.every(y => y.tradeBalance > 0);
-    const totalTradeSurplus = years.reduce((sum, y) => sum + Math.max(0, y.tradeBalance), 0);
-    if (allPositiveTrade && totalTradeSurplus > 5000) {
-      achievements.push({ name: 'Trade Champion', description: 'Trade surplus all years', points: 40 });
-      bonusPoints += 40;
-    }
-    
-    // Achievement: Phoenix Rising (50 points)
-    const startGDP = gameData.economicData[country].gdp;
-    const endGDP = startGDP + years.reduce((sum, y) => sum + y.gdpGrowth, 0);
-    if (endGDP / startGDP > 1.3) {
-      achievements.push({ name: 'Phoenix Rising', description: '30%+ GDP growth', points: 50 });
-      bonusPoints += 50;
-    }
-    
-    // China-specific achievements
-    if (country === 'China') {
-      // Survived the Storm (automatic)
-      achievements.push({ name: 'Survived the Storm', description: 'Completed Phase 2 as China', points: 30 });
-      bonusPoints += 30;
-      
-      // Great Leap (50 points) - High growth in reconstruction years
-      const reconstructionYears = [1950, 1951, 1952].map(y => 
-        gameState.phase2.yearlyData[y] ? gameState.phase2.yearlyData[y][country] : null
-      ).filter(Boolean);
-      
-      if (reconstructionYears.length >= 3) {
-        const avgReconstructionGDP = reconstructionYears.reduce((sum, y) => sum + y.gdpGrowth, 0) / reconstructionYears.length;
-        if (avgReconstructionGDP > 8) {
-          achievements.push({ name: 'Great Leap', description: 'Exceptional post-civil war recovery', points: 50 });
-          bonusPoints += 50;
-        }
-      }
-    }
-    
-    // USA-specific achievements
-    if (country === 'USA') {
-      // Bretton Woods Leader (40 points)
-      const alwaysHighestGold = years.every((_, idx) => {
-        const year = 1946 + idx;
-        const yearData = gameState.phase2.yearlyData[year];
-        if (!yearData) return false;
-        return Object.keys(yearData).every(c => 
-          c === 'USA' || yearData['USA'].goldReserves >= yearData[c].goldReserves
-        );
-      });
-      
-      if (alwaysHighestGold) {
-        achievements.push({ name: 'Bretton Woods Leader', description: 'Maintained gold supremacy', points: 40 });
-        bonusPoints += 40;
-      }
-    }
-    
-    // USSR-specific achievement
-    if (country === 'USSR') {
-      // Soviet Miracle (40 points)
-      if (avgGDP >= 6) {
-        achievements.push({ name: 'Soviet Miracle', description: 'Command economy excellence', points: 40 });
-        bonusPoints += 40;
-      }
-    }
-    
-    // India-specific achievements
-    if (country === 'India') {
-      // Partition Survivor (20 points) - Navigate 1947-1948 transition successfully
-      const partition1947 = gameState.phase2.yearlyData[1947]?.[country];
-      const partition1948 = gameState.phase2.yearlyData[1948]?.[country];
-      if (partition1947 && partition1948) {
-        // Survived if GDP stayed positive and unemployment didn't explode
-        if (partition1947.gdpGrowth > -3 && partition1948.gdpGrowth > -1 && 
-            partition1947.unemployment < 15 && partition1948.unemployment < 12) {
-          achievements.push({ name: 'Partition Survivor', description: 'Navigated independence crisis successfully', points: 20 });
-          bonusPoints += 20;
-        }
-      }
-      
-      // Post-Colonial Success (40 points) - Strong growth after independence
-      if (avgGDP >= 5 && avgInflation < 6) {
-        achievements.push({ name: 'Post-Colonial Success', description: 'Strong independent development', points: 40 });
-        bonusPoints += 40;
-      }
-      
-      // Non-Aligned Leader (30 points) - Balance without extreme policies
-      const avgTariff = years.reduce((sum, y) => {
-        const year = 1946 + years.indexOf(y);
-        const policy = gameState.phase2.policies[year]?.[country];
-        return sum + (policy?.tariffRate || 0);
-      }, 0) / years.length;
-      
-      if (avgTariff >= 15 && avgTariff <= 35) {
-        achievements.push({ name: 'Non-Aligned Leader', description: 'Balanced economic sovereignty', points: 30 });
-        bonusPoints += 30;
-      }
-    }
-    
-    // Argentina-specific achievements
-    if (country === 'Argentina') {
-      // Agricultural Powerhouse (40 points) - Strong trade performance
-      const totalTrade = years.reduce((sum, y) => sum + Math.max(0, y.tradeBalance), 0);
-      if (totalTrade > 8000 && avgGDP >= 4) {
-        achievements.push({ name: 'Agricultural Powerhouse', description: 'Export-led prosperity', points: 40 });
-        bonusPoints += 40;
-      }
-      
-      // Economic Independence (30 points) - Avoid debt while growing
-      const finalGold = years[years.length - 1].goldReserves;
-      const startGold = gameData.economicData[country].goldReserves;
-      if (finalGold >= startGold && avgGDP >= 4) {
-        achievements.push({ name: 'Economic Independence', description: 'Self-sufficient growth', points: 30 });
-        bonusPoints += 30;
-      }
-    }
-    
-    // Store achievements
-    gameState.phase2.achievements[country] = {
-      list: achievements,
-      totalBonus: bonusPoints
-    };
-    
-    // Add bonus to score
-    gameState.scores[country] += bonusPoints;
-    
-    console.log(`${country} earned ${bonusPoints} achievement bonus points`);
-    achievements.forEach(a => console.log(`  - ${a.name}: ${a.points} pts`));
-  });
-}
-
-
-// Calculate scores for current round (Phase 1)
-function calculateScoresForCurrentRound() {
-  const issues = require('./game-data.json').issues;
-  const currentIssue = issues[gameState.currentRound - 1];
-  
-  if (currentIssue) {
-    // Count votes for each option
-    const voteCounts = {};
-    currentIssue.options.forEach(opt => voteCounts[opt.id] = 0);
-    
-    Object.keys(gameState.players).forEach(playerId => {
-      const player = gameState.players[playerId];
-      const voteKey = `${currentIssue.id}-${player.country}`;
-      const votedOptionId = gameState.votes[voteKey];
-      if (votedOptionId) {
-        voteCounts[votedOptionId] = (voteCounts[votedOptionId] || 0) + 1;
-      }
-    });
-    
-    // Find winning option
-    let winningOptionId = null;
-    let maxVotes = -1;
-    Object.entries(voteCounts).forEach(([optId, count]) => {
-      if (count > maxVotes) {
-        maxVotes = count;
-        winningOptionId = optId;
-      }
-    });
-    
-    // Award points based on winning option
-    if (winningOptionId) {
-      const winningOption = currentIssue.options.find(opt => opt.id === winningOptionId);
-      if (winningOption) {
-        Object.keys(gameState.players).forEach(playerId => {
-          const player = gameState.players[playerId];
-          
-          if (winningOption.favors.includes(player.country)) {
-            gameState.scores[player.country] += 10;
-          }
-          
-          if (winningOption.opposes.includes(player.country)) {
-            gameState.scores[player.country] -= 5;
-          }
-        });
+    try {
+        const hashedPassword = await bcrypt.hash(password, 10);
         
-        // Store round result
-        gameState.roundHistory.push({
-          round: gameState.currentRound,
-          issue: currentIssue.title,
-          winningOption: winningOption.text,
-          votes: voteCounts
+        const [result] = await pool.execute(
+            'INSERT INTO users (username, email, password_hash, display_name, is_teacher) VALUES (?, ?, ?, ?, ?)',
+            [username, email, hashedPassword, displayName || username, isTeacher || false]
+        );
+        
+        req.session.userId = result.insertId;
+        req.session.username = username;
+        
+        res.json({ 
+            success: true, 
+            userId: result.insertId,
+            username: username,
+            displayName: displayName || username
         });
-      }
+    } catch (error) {
+        if (error.code === 'ER_DUP_ENTRY') {
+            res.status(400).json({ error: 'Username or email already exists' });
+        } else {
+            console.error('Registration error:', error);
+            res.status(500).json({ error: 'Registration failed' });
+        }
     }
-  }
-}
+});
 
-// Start server
-server.listen(PORT, () => {
-  console.log(`
-╔═══════════════════════════════════════════════════════╗
-║   Bretton Woods Multiplayer Server                   ║
-║   Server running on http://localhost:65002          ║
-║                                                       ║
-║   Students can connect by opening:                   ║
-║   http://[YOUR-IP]:65002                            ║
-║                                                       ║
-║   Press Ctrl+C to stop                               ║
-╚═══════════════════════════════════════════════════════╝
-  `);
+// Login
+app.post('/api/auth/login', async (req, res) => {
+    const { username, password } = req.body;
+    
+    try {
+        const [users] = await pool.execute(
+            'SELECT user_id, username, password_hash, display_name, is_teacher FROM users WHERE username = ?',
+            [username]
+        );
+        
+        if (users.length === 0) {
+            return res.status(401).json({ error: 'Invalid credentials' });
+        }
+        
+        const user = users[0];
+        const passwordMatch = await bcrypt.compare(password, user.password_hash);
+        
+        if (!passwordMatch) {
+            return res.status(401).json({ error: 'Invalid credentials' });
+        }
+        
+        // Update last login
+        await pool.execute('UPDATE users SET last_login = CURRENT_TIMESTAMP WHERE user_id = ?', [user.user_id]);
+        
+        req.session.userId = user.user_id;
+        req.session.username = user.username;
+        
+        res.json({
+            success: true,
+            userId: user.user_id,
+            username: user.username,
+            displayName: user.display_name,
+            isTeacher: user.is_teacher
+        });
+    } catch (error) {
+        console.error('Login error:', error);
+        res.status(500).json({ error: 'Login failed' });
+    }
+});
+
+// Logout
+app.post('/api/auth/logout', (req, res) => {
+    req.session.destroy();
+    res.json({ success: true });
+});
+
+// Check session
+app.get('/api/auth/session', async (req, res) => {
+    if (!req.session.userId) {
+        return res.json({ authenticated: false });
+    }
+    
+    try {
+        const [users] = await pool.execute(
+            'SELECT user_id, username, display_name, is_teacher FROM users WHERE user_id = ?',
+            [req.session.userId]
+        );
+        
+        if (users.length === 0) {
+            return res.json({ authenticated: false });
+        }
+        
+        res.json({
+            authenticated: true,
+            user: users[0]
+        });
+    } catch (error) {
+        res.status(500).json({ error: 'Session check failed' });
+    }
+});
+
+// ============================================================
+// GAME MANAGEMENT ROUTES
+// ============================================================
+
+// Create new game
+app.post('/api/games/create', async (req, res) => {
+    if (!req.session.userId) {
+        return res.status(401).json({ error: 'Not authenticated' });
+    }
+    
+    try {
+        // Call stored procedure to create game
+        const [result] = await pool.execute(
+            'CALL sp_create_game(?, @game_id, @game_code)',
+            [req.session.userId]
+        );
+        
+        const [output] = await pool.execute('SELECT @game_id as gameId, @game_code as gameCode');
+        
+        res.json({
+            success: true,
+            gameId: output[0].gameId,
+            gameCode: output[0].gameCode
+        });
+    } catch (error) {
+        console.error('Create game error:', error);
+        res.status(500).json({ error: 'Failed to create game' });
+    }
+});
+
+// Join game
+app.post('/api/games/join', async (req, res) => {
+    const { gameCode, countryCode } = req.body;
+    
+    if (!req.session.userId) {
+        return res.status(401).json({ error: 'Not authenticated' });
+    }
+    
+    try {
+        // Call stored procedure to join game
+        await pool.execute(
+            'CALL sp_join_game(?, ?, ?, @success, @message)',
+            [gameCode, req.session.userId, countryCode]
+        );
+        
+        const [output] = await pool.execute('SELECT @success as success, @message as message');
+        
+        if (output[0].success) {
+            res.json({ success: true, message: output[0].message });
+        } else {
+            res.status(400).json({ success: false, error: output[0].message });
+        }
+    } catch (error) {
+        console.error('Join game error:', error);
+        res.status(500).json({ error: 'Failed to join game' });
+    }
+});
+
+// Get game lobby info
+app.get('/api/games/:gameCode/lobby', async (req, res) => {
+    const { gameCode } = req.params;
+    
+    try {
+        // Get game info
+        const [games] = await pool.execute(
+            `SELECT g.game_id, g.game_code, g.game_status, g.current_round, g.created_at,
+                    u.username as host_username
+             FROM games g
+             LEFT JOIN users u ON g.host_user_id = u.user_id
+             WHERE g.game_code = ?`,
+            [gameCode]
+        );
+        
+        if (games.length === 0) {
+            return res.status(404).json({ error: 'Game not found' });
+        }
+        
+        const game = games[0];
+        
+        // Get players in lobby
+        const [players] = await pool.execute(
+            `SELECT p.player_id, p.user_id, u.username, u.display_name, 
+                    c.country_code, c.country_name, c.flag_emoji, p.is_ready
+             FROM players p
+             JOIN users u ON p.user_id = u.user_id
+             JOIN countries c ON p.country_id = c.country_id
+             WHERE p.game_id = ?`,
+            [game.game_id]
+        );
+        
+        // Get available countries
+        const [allCountries] = await pool.execute('SELECT * FROM countries');
+        const takenCountries = players.map(p => p.country_code);
+        const availableCountries = allCountries.filter(c => !takenCountries.includes(c.country_code));
+        
+        res.json({
+            game: game,
+            players: players,
+            availableCountries: availableCountries
+        });
+    } catch (error) {
+        console.error('Get lobby error:', error);
+        res.status(500).json({ error: 'Failed to get lobby info' });
+    }
+});
+
+// Mark player ready
+app.post('/api/games/:gameCode/ready', async (req, res) => {
+    const { gameCode } = req.params;
+    
+    if (!req.session.userId) {
+        return res.status(401).json({ error: 'Not authenticated' });
+    }
+    
+    try {
+        // Get game and player
+        const [games] = await pool.execute('SELECT game_id FROM games WHERE game_code = ?', [gameCode]);
+        if (games.length === 0) {
+            return res.status(404).json({ error: 'Game not found' });
+        }
+        
+        const gameId = games[0].game_id;
+        
+        // Update player ready status
+        await pool.execute(
+            'UPDATE players SET is_ready = TRUE WHERE game_id = ? AND user_id = ?',
+            [gameId, req.session.userId]
+        );
+        
+        res.json({ success: true });
+    } catch (error) {
+        console.error('Mark ready error:', error);
+        res.status(500).json({ error: 'Failed to mark ready' });
+    }
+});
+
+// Start game
+app.post('/api/games/:gameCode/start', async (req, res) => {
+    const { gameCode } = req.params;
+    
+    if (!req.session.userId) {
+        return res.status(401).json({ error: 'Not authenticated' });
+    }
+    
+    try {
+        const [games] = await pool.execute('SELECT game_id, host_user_id FROM games WHERE game_code = ?', [gameCode]);
+        if (games.length === 0) {
+            return res.status(404).json({ error: 'Game not found' });
+        }
+        
+        const game = games[0];
+        
+        // Check if user is host
+        if (game.host_user_id !== req.session.userId) {
+            return res.status(403).json({ error: 'Only host can start game' });
+        }
+        
+        // Check if all players are ready
+        const [readyCheck] = await pool.execute(
+            'SELECT COUNT(*) as total, SUM(is_ready) as ready FROM players WHERE game_id = ?',
+            [game.game_id]
+        );
+        
+        if (readyCheck[0].total !== readyCheck[0].ready) {
+            return res.status(400).json({ error: 'Not all players are ready' });
+        }
+        
+        // Start game
+        await pool.execute(
+            'UPDATE games SET game_status = ?, current_round = 1, started_at = CURRENT_TIMESTAMP WHERE game_id = ?',
+            ['phase1_active', game.game_id]
+        );
+        
+        res.json({ success: true });
+    } catch (error) {
+        console.error('Start game error:', error);
+        res.status(500).json({ error: 'Failed to start game' });
+    }
+});
+
+// Get current game state
+app.get('/api/games/:gameCode/state', async (req, res) => {
+    const { gameCode } = req.params;
+    
+    try {
+        // Get game
+        const [games] = await pool.execute(
+            'SELECT * FROM games WHERE game_code = ?',
+            [gameCode]
+        );
+        
+        if (games.length === 0) {
+            return res.status(404).json({ error: 'Game not found' });
+        }
+        
+        const game = games[0];
+        
+        // Get players with scores
+        const [players] = await pool.execute(
+            `SELECT p.player_id, p.user_id, u.username, u.display_name,
+                    c.country_code, c.country_name, c.flag_emoji, c.color_hex,
+                    p.phase1_score, p.phase2_score, p.total_score
+             FROM players p
+             JOIN users u ON p.user_id = u.user_id
+             JOIN countries c ON p.country_id = c.country_id
+             WHERE p.game_id = ?
+             ORDER BY p.total_score DESC`,
+            [game.game_id]
+        );
+        
+        // Get current round issue if in play
+        let currentIssue = null;
+        let currentOptions = [];
+        let votes = [];
+        
+        if (game.game_status === 'phase1_active' && game.current_round > 0) {
+            const [gameIssues] = await pool.execute(
+                `SELECT gi.game_issue_id, gi.issue_id, i.title, i.description, i.historical_context
+                 FROM game_issues gi
+                 JOIN issues i ON gi.issue_id = i.issue_id
+                 WHERE gi.game_id = ? AND gi.round_number = ?`,
+                [game.game_id, game.current_round]
+            );
+            
+            if (gameIssues.length > 0) {
+                currentIssue = gameIssues[0];
+                
+                // Get options for this issue
+                const [options] = await pool.execute(
+                    `SELECT * FROM issue_options WHERE issue_id = ? ORDER BY option_letter`,
+                    [currentIssue.issue_id]
+                );
+                currentOptions = options;
+                
+                // Get votes for this round
+                const [voteData] = await pool.execute(
+                    `SELECT v.*, p.user_id, c.country_code
+                     FROM votes v
+                     JOIN players p ON v.player_id = p.player_id
+                     JOIN countries c ON p.country_id = c.country_id
+                     WHERE v.game_issue_id = ?`,
+                    [currentIssue.game_issue_id]
+                );
+                votes = voteData;
+            }
+        }
+        
+        res.json({
+            game: game,
+            players: players,
+            currentIssue: currentIssue,
+            currentOptions: currentOptions,
+            votes: votes
+        });
+    } catch (error) {
+        console.error('Get game state error:', error);
+        res.status(500).json({ error: 'Failed to get game state' });
+    }
+});
+
+// Submit vote
+app.post('/api/games/:gameCode/vote', async (req, res) => {
+    const { gameCode } = req.params;
+    const { optionId, voteValue } = req.body;
+    
+    if (!req.session.userId) {
+        return res.status(401).json({ error: 'Not authenticated' });
+    }
+    
+    try {
+        // Get game and verify it's active
+        const [games] = await pool.execute(
+            'SELECT game_id, current_round FROM games WHERE game_code = ? AND game_status = ?',
+            [gameCode, 'phase1_active']
+        );
+        
+        if (games.length === 0) {
+            return res.status(400).json({ error: 'Game not active' });
+        }
+        
+        const game = games[0];
+        
+        // Get player
+        const [players] = await pool.execute(
+            'SELECT player_id FROM players WHERE game_id = ? AND user_id = ?',
+            [game.game_id, req.session.userId]
+        );
+        
+        if (players.length === 0) {
+            return res.status(400).json({ error: 'Not in this game' });
+        }
+        
+        const playerId = players[0].player_id;
+        
+        // Get game_issue_id
+        const [gameIssues] = await pool.execute(
+            'SELECT game_issue_id FROM game_issues WHERE game_id = ? AND round_number = ?',
+            [game.game_id, game.current_round]
+        );
+        
+        if (gameIssues.length === 0) {
+            return res.status(400).json({ error: 'No issue for this round' });
+        }
+        
+        const gameIssueId = gameIssues[0].game_issue_id;
+        
+        // Insert or update vote
+        await pool.execute(
+            `INSERT INTO votes (game_issue_id, player_id, option_id, vote_value)
+             VALUES (?, ?, ?, ?)
+             ON DUPLICATE KEY UPDATE vote_value = ?, voted_at = CURRENT_TIMESTAMP`,
+            [gameIssueId, playerId, optionId, voteValue, voteValue]
+        );
+        
+        res.json({ success: true });
+    } catch (error) {
+        console.error('Submit vote error:', error);
+        res.status(500).json({ error: 'Failed to submit vote' });
+    }
+});
+
+// Advance to next round
+app.post('/api/games/:gameCode/next-round', async (req, res) => {
+    const { gameCode } = req.params;
+    
+    if (!req.session.userId) {
+        return res.status(401).json({ error: 'Not authenticated' });
+    }
+    
+    try {
+        const [games] = await pool.execute(
+            'SELECT game_id, current_round, host_user_id FROM games WHERE game_code = ?',
+            [gameCode]
+        );
+        
+        if (games.length === 0) {
+            return res.status(404).json({ error: 'Game not found' });
+        }
+        
+        const game = games[0];
+        
+        // Verify all players have voted
+        const [voteCheck] = await pool.execute(
+            `SELECT 
+                (SELECT COUNT(DISTINCT player_id) FROM players WHERE game_id = ?) as total_players,
+                (SELECT COUNT(DISTINCT player_id) FROM votes v 
+                 JOIN game_issues gi ON v.game_issue_id = gi.game_issue_id
+                 WHERE gi.game_id = ? AND gi.round_number = ?) as voted_players`,
+            [game.game_id, game.game_id, game.current_round]
+        );
+        
+        if (voteCheck[0].total_players !== voteCheck[0].voted_players) {
+            return res.status(400).json({ error: 'Not all players have voted' });
+        }
+        
+        // Calculate scores for this round
+        await pool.execute('CALL sp_calculate_round_scores(?, ?)', [game.game_id, game.current_round]);
+        
+        // Check if this was the last round
+        const [issueCount] = await pool.execute(
+            'SELECT COUNT(*) as count FROM game_issues WHERE game_id = ?',
+            [game.game_id]
+        );
+        
+        if (game.current_round >= issueCount[0].count) {
+            // Game complete
+            await pool.execute(
+                `UPDATE games SET game_status = ?, phase1_complete_time = CURRENT_TIMESTAMP 
+                 WHERE game_id = ?`,
+                ['phase1_complete', game.game_id]
+            );
+        } else {
+            // Next round
+            await pool.execute(
+                'UPDATE games SET current_round = current_round + 1 WHERE game_id = ?',
+                [game.game_id]
+            );
+        }
+        
+        res.json({ success: true });
+    } catch (error) {
+        console.error('Next round error:', error);
+        res.status(500).json({ error: 'Failed to advance round' });
+    }
+});
+
+// Get final results
+app.get('/api/games/:gameCode/results', async (req, res) => {
+    const { gameCode } = req.params;
+    
+    try {
+        const [games] = await pool.execute(
+            'SELECT game_id FROM games WHERE game_code = ?',
+            [gameCode]
+        );
+        
+        if (games.length === 0) {
+            return res.status(404).json({ error: 'Game not found' });
+        }
+        
+        const gameId = games[0].game_id;
+        
+        // Get final standings
+        const [standings] = await pool.execute(
+            `SELECT p.player_id, u.username, u.display_name,
+                    c.country_code, c.country_name, c.flag_emoji,
+                    p.phase1_score, p.phase2_score, p.total_score,
+                    (SELECT COUNT(*) FROM votes v
+                     JOIN game_issues gi ON v.game_issue_id = gi.game_issue_id
+                     JOIN issue_options io ON v.option_id = io.option_id
+                     WHERE v.player_id = p.player_id 
+                     AND gi.winning_option_id = v.option_id
+                     AND FIND_IN_SET(c.country_code, io.favors_countries) > 0) as agreements_favored,
+                    (SELECT COUNT(*) FROM votes v
+                     JOIN game_issues gi ON v.game_issue_id = gi.game_issue_id
+                     JOIN issue_options io ON v.option_id = io.option_id
+                     WHERE v.player_id = p.player_id 
+                     AND gi.winning_option_id = v.option_id
+                     AND FIND_IN_SET(c.country_code, io.opposes_countries) > 0) as agreements_opposed
+             FROM players p
+             JOIN users u ON p.user_id = u.user_id
+             JOIN countries c ON p.country_id = c.country_id
+             WHERE p.game_id = ?
+             ORDER BY p.total_score DESC`,
+            [gameId]
+        );
+        
+        // Get all round results
+        const [roundResults] = await pool.execute(
+            `SELECT gi.round_number, i.title as issue_title,
+                    io.option_letter, io.option_text, io.favors_countries, io.opposes_countries
+             FROM game_issues gi
+             JOIN issues i ON gi.issue_id = i.issue_id
+             JOIN issue_options io ON gi.winning_option_id = io.option_id
+             WHERE gi.game_id = ?
+             ORDER BY gi.round_number`,
+            [gameId]
+        );
+        
+        res.json({
+            standings: standings,
+            roundResults: roundResults
+        });
+    } catch (error) {
+        console.error('Get results error:', error);
+        res.status(500).json({ error: 'Failed to get results' });
+    }
+});
+
+// Reset game (for playing again)
+app.post('/api/games/:gameCode/reset', async (req, res) => {
+    const { gameCode } = req.params;
+    
+    if (!req.session.userId) {
+        return res.status(401).json({ error: 'Not authenticated' });
+    }
+    
+    try {
+        const [games] = await pool.execute(
+            'SELECT game_id, host_user_id FROM games WHERE game_code = ?',
+            [gameCode]
+        );
+        
+        if (games.length === 0) {
+            return res.status(404).json({ error: 'Game not found' });
+        }
+        
+        const game = games[0];
+        
+        // Only host can reset
+        if (game.host_user_id !== req.session.userId) {
+            return res.status(403).json({ error: 'Only host can reset game' });
+        }
+        
+        // Delete votes
+        await pool.execute(
+            `DELETE v FROM votes v
+             JOIN game_issues gi ON v.game_issue_id = gi.game_issue_id
+             WHERE gi.game_id = ?`,
+            [game.game_id]
+        );
+        
+        // Reset game_issues
+        await pool.execute(
+            'UPDATE game_issues SET winning_option_id = NULL, completed_at = NULL WHERE game_id = ?',
+            [game.game_id]
+        );
+        
+        // Reset player scores and readiness
+        await pool.execute(
+            'UPDATE players SET phase1_score = 0, phase2_score = 0, is_ready = FALSE WHERE game_id = ?',
+            [game.game_id]
+        );
+        
+        // Reset game
+        await pool.execute(
+            'UPDATE games SET game_status = ?, current_round = 0, started_at = NULL WHERE game_id = ?',
+            ['lobby', game.game_id]
+        );
+        
+        res.json({ success: true });
+    } catch (error) {
+        console.error('Reset game error:', error);
+        res.status(500).json({ error: 'Failed to reset game' });
+    }
+});
+
+// ============================================================
+// UTILITY ROUTES
+// ============================================================
+
+// Get all countries
+app.get('/api/countries', async (req, res) => {
+    try {
+        const [countries] = await pool.execute('SELECT * FROM countries ORDER BY country_code');
+        res.json(countries);
+    } catch (error) {
+        console.error('Get countries error:', error);
+        res.status(500).json({ error: 'Failed to get countries' });
+    }
+});
+
+// Get all issues
+app.get('/api/issues', async (req, res) => {
+    try {
+        const [issues] = await pool.execute(
+            'SELECT * FROM issues ORDER BY round_order'
+        );
+        
+        // Get options for each issue
+        for (let issue of issues) {
+            const [options] = await pool.execute(
+                'SELECT * FROM issue_options WHERE issue_id = ? ORDER BY option_letter',
+                [issue.issue_id]
+            );
+            issue.options = options;
+        }
+        
+        res.json(issues);
+    } catch (error) {
+        console.error('Get issues error:', error);
+        res.status(500).json({ error: 'Failed to get issues' });
+    }
+});
+
+// Health check
+app.get('/api/health', async (req, res) => {
+    try {
+        await pool.execute('SELECT 1');
+        res.json({ status: 'ok', database: 'connected' });
+    } catch (error) {
+        res.status(500).json({ status: 'error', database: 'disconnected' });
+    }
+});
+
+// ============================================================
+// START SERVER
+// ============================================================
+
+app.listen(PORT, () => {
+    console.log(`Bretton Woods server running on port ${PORT}`);
+    console.log(`API available at http://localhost:${PORT}/api`);
 });
 
 // Graceful shutdown
-process.on('SIGINT', () => {
-  console.log('\nSaving game state and shutting down...');
-  saveGameState();
-  process.exit(0);
+process.on('SIGTERM', async () => {
+    console.log('SIGTERM received, closing server...');
+    await pool.end();
+    process.exit(0);
 });
